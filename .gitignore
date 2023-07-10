@@ -161,3 +161,6 @@ cython_debug/
 
 # Datasets
 data/*
+
+# Misc
+testing.ipynb
