@@ -49,7 +49,7 @@ def validate(data: data.DataLoader, model: nn.Module):
     seen = 0
     for datum, target in pbar:
         with profile:
-            predictions = model(data)
+            predictions = model(datum)
         seen += datum.shape[0]
         accuracy_top1.update(predictions, target)
         accuracy_top5.update(predictions, target)
@@ -75,12 +75,151 @@ class Profile(contextlib.ContextDecorator):
         self.start = self.time()
         return self
     
-    def __exit__(self):
+    def __exit__(self, type, value, traceback):
         self.dt = self.time() - self.start
         self.t += self.dt
         
     def time(self):
         if self.cuda:
             torch.cuda.synchronize()
-        else:
-            time.time()
+        return time.time()
+            
+def global_smallest_filter_normalized(parameters: prune.Iterable, amount: float, **kwargs):
+    # Ensure parameters is a list or generator of tuples
+    if not isinstance(parameters, prune.Iterable):
+        raise TypeError('global_smallest_filter(): parameters is not an iterable')
+    
+    # Get the total number of parameters
+    num_params = 0
+    for module, name in parameters:
+        num_params += module.weight.numel()
+        prune.identity(module, name)
+        
+    # Determine the number of params to prune
+    num_to_prune = int(num_params * amount)
+    
+    # TODO: Replace the hard-coded 'module.weight' and use getattr on param instead with some checks
+    # Create importance scores
+    importance_scores = [
+        torch.vstack([
+            torch.norm(module.weight, 1, (1, 2, 3)).to(module.weight.device) / (module.kernel_size[0]*module.kernel_size[1]*module.in_channels),
+            torch.range(0, module.weight.shape[0] - 1).to(module.weight.device),
+            (torch.ones(module.weight.shape[0]) * i).to(module.weight.device),
+            torch.ones(module.weight.shape[0]).to(module.weight.device) * (module.kernel_size[0]*module.kernel_size[1]*module.in_channels)
+        ])
+        for i, (module, param) in enumerate(parameters)
+    ]
+    importance_scores = torch.hstack(importance_scores)
+    
+    # Sort the importance score matrix along the L1 norm row
+    sorted_indices = importance_scores[0,:].sort()[1]
+    importance_scores = importance_scores[:, sorted_indices]
+    
+    # Get the cumulative sum of the filter size row to determine when to stop pruning
+    importance_scores[3,:] = torch.cumsum(importance_scores[3,:], -1)
+    
+    # Find the index of the last filter to be pruned
+    importance_scores[3,:] > num_to_prune
+    last_prune_idx = torch.argmax((importance_scores[3,:] > num_to_prune).to(dtype=torch.int))
+    importance_scores = importance_scores[:, :last_prune_idx]
+    
+    # Iterate over the importance scores and prune the corresponding filter
+    for i in range(last_prune_idx):        
+        target = importance_scores[:, i]
+        filter_idx = target[1].to(dtype=torch.int)
+        module_idx = target[2].to(dtype=torch.int)
+        
+        module, name = parameters[module_idx]
+        
+        # Determine the filter size
+        # filter_size = module.in_channels*module.kernel_size[0]*module.kernel_size[1]
+        
+        # Get the default mask of the module
+        mask = getattr(module, name + "_mask", torch.ones_like(getattr(module, name)))
+        
+        # Compute the new module mask
+        # mask = mask.view(-1)
+        # mask[filter_size * filter_idx : filter_size * filter_idx + filter_size] = 0
+        # mask = mask.view(module.weight.shape)
+        mask[filter_idx, :, :, :] = 0
+        
+        # Get and modify the bias mask
+        if module.bias != None:
+            bias_mask = getattr(module, 'bias' + '_mask', torch.ones_like(getattr(module, 'bias')))
+            bias_mask[filter_idx] = 0
+        
+        # Apply the mask
+        prune.custom_from_mask(module, name, mask=mask)
+        if module.bias != None:
+            prune.custom_from_mask(module, 'bias', mask=bias_mask)
+            prune.remove(module, 'bias')
+        prune.remove(module, name)
+        
+def global_smallest_filter_normalized2(parameters: prune.Iterable, amount: float, **kwargs):
+    # Ensure parameters is a list or generator of tuples
+    if not isinstance(parameters, prune.Iterable):
+        raise TypeError('global_smallest_filter(): parameters is not an iterable')
+    
+    # Get the total number of parameters
+    num_params = 0
+    for module, name in parameters:
+        num_params += module.weight.numel()
+        prune.identity(module, name)
+        
+    # Determine the number of params to prune
+    num_to_prune = int(num_params * amount)
+    
+    # TODO: Replace the hard-coded 'module.weight' and use getattr on param instead with some checks
+    # Create importance scores
+    importance_scores = [
+        torch.vstack([
+            torch.norm(module.weight, 1, (1, 2, 3)).to(module.weight.device) / (module.kernel_size[0]*module.kernel_size[1]*module.in_channels),
+            torch.range(0, module.weight.shape[0] - 1).to(module.weight.device),
+            (torch.ones(module.weight.shape[0]) * i).to(module.weight.device),
+            torch.ones(module.weight.shape[0]).to(module.weight.device) * (module.kernel_size[0]*module.kernel_size[1]*module.in_channels)
+        ])
+        for i, (module, param) in enumerate(parameters)
+    ]
+    importance_scores = torch.hstack(importance_scores)
+    
+    # Sort the importance score matrix along the L1 norm row
+    sorted_indices = importance_scores[0,:].sort()[1]
+    importance_scores = importance_scores[:, sorted_indices]
+    
+    # Get the cumulative sum of the filter size row to determine when to stop pruning
+    importance_scores[3,:] = torch.cumsum(importance_scores[3,:], -1)
+    
+    # Find the index of the last filter to be pruned
+    importance_scores[3,:] > num_to_prune
+    last_prune_idx = torch.argmax((importance_scores[3,:] > num_to_prune).to(dtype=torch.int))
+    importance_scores = importance_scores[:, :last_prune_idx]
+    
+    # Get the unique module indices
+    module_indices = torch.unique(importance_scores[2,:]).to(dtype=torch.int)
+    
+    # Iterate over the importance scores and prune the corresponding filter
+    # for i in range(last_prune_idx):        
+    for module_idx in module_indices:
+        # Get the importance scores corresponding to this layer
+        module_scores = importance_scores[:,(importance_scores[2,:] == module_idx).nonzero().squeeze(1)]
+        
+        # Get the kernel indices of all kernels in this layer
+        filter_indices = module_scores[1,:].to(dtype=torch.long)
+        
+        # Get the default mask of the module
+        mask = getattr(module, name + "_mask", torch.ones_like(getattr(module, name)))
+        
+        # Compute the new module mask
+        mask[filter_indices, :, :, :] = 0
+        
+        # Get and modify the bias mask
+        if module.bias != None:
+            bias_mask = getattr(module, 'bias' + '_mask', torch.ones_like(getattr(module, 'bias')))
+            bias_mask[filter_indices] = 0
+            
+        # Apply the mask
+        prune.custom_from_mask(module, name, mask=mask)
+        if module.bias != None:
+            prune.custom_from_mask(module, 'bias', mask=bias_mask)
+            prune.remove(module, 'bias')
+        prune.remove(module, name)
