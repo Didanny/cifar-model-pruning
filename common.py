@@ -20,6 +20,17 @@ def get_val_transforms(mean: Sequence[int], std: Sequence[int]):
         T.ToTensor(),
         T.Normalize(mean, std)
     ])
+    
+def get_dependency_graph_vgg(vgg: nn.Module):
+    dependencies = {}
+    modules = [name for name, module in vgg.named_modules() if isinstance(module, nn.Conv2d)]
+    for i, module in enumerate(modules):
+        if i == 0:
+            prev_module = module
+            continue
+        dependencies[module] = prev_module
+        prev_module = module
+    return dependencies
 
 def get_dataset(dataset_name: Literal['cifar10', 'cifar100']):
     if dataset_name == 'cifar10':
@@ -36,6 +47,7 @@ def load_model(dataset_name: Literal, architecture: Literal, pretrained: Optiona
 
 def validate(data: data.DataLoader, model: nn.Module):
     # Set up the quality metrics
+    # TODO: Remove hard-coded num_classes
     accuracy_top1 = Accuracy(task='multiclass', num_classes=100)
     accuracy_top5 = Accuracy(task='multiclass', num_classes=100, top_k=5)
     
@@ -84,7 +96,7 @@ class Profile(contextlib.ContextDecorator):
             torch.cuda.synchronize()
         return time.time()
     
-def prune_kernel(downstream_parameter: tuple(nn.Conv2d, Literal), upstream_parameter: tuple(nn.Conv2d, Literal)):
+def prune_kernel(downstream_parameter: tuple[nn.Conv2d, Literal], upstream_parameter: tuple[nn.Conv2d, Literal]):
     # Get the pruned filter indices from the pruning mask of the upstream module
     up_module, up_name = upstream_parameter
     up_mask = getattr(up_module, up_name + '_mask')
