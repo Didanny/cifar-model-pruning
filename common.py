@@ -9,8 +9,8 @@ from torchvision.datasets import CIFAR10, CIFAR100
 from torchmetrics.classification import Accuracy
 from torch import nn
 from pathlib import Path
-from typing import Optional, Sequence, Union
-from typing_extensions import Literal
+from typing import Optional, Sequence, Union, TypedDict
+from typing_extensions import Literal, TypeAlias
 from tqdm import tqdm
 
 DATA_DIR = Path('./data')
@@ -31,6 +31,23 @@ def get_dependency_graph_vgg(vgg: nn.Module):
         dependencies[module] = prev_module
         prev_module = module
     return dependencies
+
+def get_name_to_module(model: nn.Module):
+    return dict((name, module) for name, module in model.named_modules()
+                if isinstance(module, nn.Conv2d))
+    
+def embed_dependencies(model: nn.Module, 
+                       dependencies: dict[Literal, Literal], 
+                       name_to_module: dict[Literal, nn.Module]):
+    for key, val in model.named_modules():
+        if not isinstance(val, nn.Conv2d):
+            continue
+        if key not in dependencies:
+            # print(key)
+            continue
+        else:
+            print(key)
+            val.dependency = name_to_module[dependencies[key]]
 
 def get_dataset(dataset_name: Literal['cifar10', 'cifar100']):
     if dataset_name == 'cifar10':
