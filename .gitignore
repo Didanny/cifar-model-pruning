@@ -162,5 +162,14 @@ cython_debug/
 # Datasets
 data/*
 
+# Log files
+*.out
+
+# ONNX
+*.onnx
+
 # Misc
 testing.ipynb
+test.py
+run.sh
+*.txt

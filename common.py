@@ -21,6 +21,10 @@ def get_val_transforms(mean: Sequence[int], std: Sequence[int]):
         T.Normalize(mean, std)
     ])
     
+def get_dependency_graph(model: nn.Module, name: str):
+    if name.startswith('cifar100_vgg'):
+        return get_dependency_graph_vgg(model)
+    
 def get_dependency_graph_vgg(vgg: nn.Module):
     dependencies = {}
     modules = [name for name, module in vgg.named_modules() if isinstance(module, nn.Conv2d)]
@@ -32,9 +36,36 @@ def get_dependency_graph_vgg(vgg: nn.Module):
         prev_module = module
     return dependencies
 
+def get_parameters_to_prune(model: nn.Module, name: str):
+    if name.startswith('cifar100_vgg'):
+        parameters_to_prune = [
+            (val, 'weight') for key, val in model.features.named_modules() if isinstance(val, torch.nn.Conv2d)
+        ]
+        return parameters_to_prune
+
 def get_name_to_module(model: nn.Module):
     return dict((name, module) for name, module in model.named_modules()
                 if isinstance(module, nn.Conv2d))
+    
+def get_num_parameters(model: nn.Module):
+    num_params = 0
+    for name, param in model.named_parameters():
+        num_params += param.numel()
+    return num_params
+
+def get_num_pruned_parameters(params: list[tuple[nn.Module, Literal]]):
+    num_pruned = 0
+    for param, _ in params:
+        num_pruned += (param.weight.view(-1) == 0).sum()
+    return num_pruned
+    
+def get_kernel_indices(module: nn.Module, pruned: Optional[bool] = True):
+    val = 0 if pruned else 1    
+    return (torch.norm(module.weight_mask.data, 1, (0, 2, 3)) == val).nonzero().view(-1) 
+
+def get_filter_indices(module: nn.Module, pruned: Optional[bool] = True):
+    val = 0 if pruned else 1    
+    return (torch.norm(module.weight_mask.data, 1, (1, 2, 3)) == val).nonzero().view(-1)        
     
 def embed_dependencies(model: nn.Module, 
                        dependencies: dict[Literal, Literal], 
@@ -43,10 +74,8 @@ def embed_dependencies(model: nn.Module,
         if not isinstance(val, nn.Conv2d):
             continue
         if key not in dependencies:
-            # print(key)
             continue
         else:
-            print(key)
             val.dependency = name_to_module[dependencies[key]]
 
 def get_dataset(dataset_name: Literal['cifar10', 'cifar100']):
@@ -112,13 +141,41 @@ class Profile(contextlib.ContextDecorator):
         if self.cuda:
             torch.cuda.synchronize()
         return time.time()
+
+def prune_kernel2(module: nn.Conv2d, dep: nn.Conv2d):
+    # Get the indices of the pruned filters
+    # dependency = getattr(module, 'dependency', None)
+    # if dependency == None:
+    #     return
+    pruned_indices = (torch.norm(dep.weight.data, 1, (1, 2, 3)) == 0).nonzero().view(-1)
+    if pruned_indices.numel() == 0:
+        return
     
-def prune_kernel(downstream_parameter: tuple[nn.Conv2d, Literal], upstream_parameter: tuple[nn.Conv2d, Literal]):
-    # Get the pruned filter indices from the pruning mask of the upstream module
-    up_module, up_name = upstream_parameter
-    up_mask = getattr(up_module, up_name + '_mask')
+    # Update the mask of the current layer
+    module.weight.data[:, pruned_indices, :, :] = 0
+    return None
+
+def prune_kernel(module: nn.Conv2d):
+    # Get the indices of the pruned filters
+    dependency = getattr(module, 'dependency', None)
+    if dependency == None:
+        return
+    pruned_indices = (torch.norm(module.dependency.weight.data, 1, (1, 2, 3)) == 0).nonzero().view(-1)
+    if pruned_indices.numel() == 0:
+        return
     
-    raise NotImplementedError
+    # Update the mask of the current layer
+    # module.weight.data[:, pruned_indices, :, :] = 0
+    # module.weight = module.weight * module.weight_mask 
+    # old_weight = module.weight_mask * module.weight_orig
+    # old_weight[:, pruned_indices, :, :] = 0
+    mask = getattr(module, 'weight_mask') #, torch.ones_like(module.weight.data))
+    prune.remove(module, 'weight')
+    mask[:, pruned_indices, :, :] = 0
+    prune.custom_from_mask(module, 'weight', mask=mask)
+    # new_weight = module.weight_mask * module.weight_orig
+    # prune.remove(module, 'weight')
+    return None
 
 def global_smallest_filter_mean(parameters: prune.Iterable, amount: float, **kwargs):
     # Ensure parameters is a list or generator of tuples
