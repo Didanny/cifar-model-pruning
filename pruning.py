@@ -41,7 +41,7 @@ def main(opt):
     
     # Get the initial accuracy
     print('Initial validation')
-    print(validate(val_loader, model))
+    # print(validate(val_loader, model))
     
     # Run exploration
     print('Starting exploration...')
@@ -59,6 +59,7 @@ def main(opt):
             mod_dep = name_to_module[residual_dependencies[key]]
             prune_residual_filter(mod, mod_dep)
         print(validate(val_loader, model))
+        print(get_num_pruned_parameters(parameters_to_prune))
         i += delta
         
         

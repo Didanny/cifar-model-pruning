@@ -63,7 +63,15 @@ def get_residual_dependency_resnet(resnet: nn.Module):
     return dependencies
 
 def get_dependency_graph_mobilenet(mobnet: nn.Module):
-    raise NotImplementedError
+    dependencies = {}
+    modules = [name for name, module in mobnet.named_modules() if isinstance(module, nn.Conv2d)]
+    for i, module in enumerate(modules):
+        if i == 0:
+            prev_module = module
+            continue
+        dependencies[module] = prev_module
+        prev_module = module
+    return dependencies
 
 def get_parameters_to_prune(model: nn.Module, name: str):
     if name.startswith('cifar100_vgg'):
@@ -89,7 +97,7 @@ def get_parameters_to_prune(model: nn.Module, name: str):
 
         for name, module in model.named_modules():
             if isinstance(module, nn.Conv2d) and not (name.endswith('2') and not name.startswith('features.17')):
-                parameters_to_prune.append(module, 'weight')
+                parameters_to_prune.append((module, 'weight'))
                 
         return parameters_to_prune
 
@@ -197,13 +205,16 @@ def prune_kernel2(module: nn.Conv2d, dep: nn.Conv2d):
     # dependency = getattr(module, 'dependency', None)
     # if dependency == None:
     #     return
-    pruned_indices = (torch.norm(dep.weight_mask, 1, (1, 2, 3)) == 0).nonzero().view(-1)
+    weight_mask = getattr(dep, 'weight_mask', torch.ones_like(dep.weight.data))
+    pruned_indices = (torch.norm(weight_mask, 1, (1, 2, 3)) == 0).nonzero().view(-1)
     if pruned_indices.numel() == 0:
         return
     
     # Update the mask of the current layer
-    module.weight.data[:, pruned_indices, :, :] = 0
-    return None
+    if module.groups == 1:
+        module.weight.data[:, pruned_indices, :, :] = 0
+    else:
+        module.weight.data[pruned_indices, :, :, :] = 0
 
 def prune_kernel(module: nn.Conv2d):
     # Get the indices of the pruned filters
@@ -228,9 +239,10 @@ def prune_kernel(module: nn.Conv2d):
     return None
 
 def prune_residual_filter(module: nn.Conv2d, dep: nn.Conv2d):
-    pruned_indices = (torch.norm(dep.weight_mask, 1, (1, 2, 3)) == 0).nonzero().view(-1)
+    weight_mask = getattr(dep, 'weight_mask', torch.ones_like(dep.weight.data))
+    pruned_indices = (torch.norm(weight_mask, 1, (1, 2, 3)) == 0).nonzero().view(-1)
     if pruned_indices.numel() == 0:
-        raise ValueError
+        return
     
     # Update the mask of the current layer
     mask = getattr(module, 'weight_mask', torch.ones_like(module.weight.data))
@@ -261,10 +273,10 @@ def global_smallest_filter_mean(parameters: prune.Iterable, amount: float, **kwa
     # Create importance scores
     importance_scores = [
         torch.vstack([
-            torch.norm(module.weight, 1, (1, 2, 3)).to(module.weight.device) / (module.kernel_size[0]*module.kernel_size[1]*module.in_channels),
+            torch.norm(module.weight, 1, (1, 2, 3)).to(module.weight.device) / (module.kernel_size[0]*module.kernel_size[1]*module.weight.shape[1]),
             torch.range(0, module.weight.shape[0] - 1).to(module.weight.device),
             (torch.ones(module.weight.shape[0]) * i).to(module.weight.device),
-            torch.ones(module.weight.shape[0]).to(module.weight.device) * (module.kernel_size[0]*module.kernel_size[1]*module.in_channels)
+            torch.ones(module.weight.shape[0]).to(module.weight.device) * (module.kernel_size[0]*module.kernel_size[1]*module.weight.shape[1])
         ])
         for i, (module, param) in enumerate(parameters)
     ]
@@ -312,8 +324,8 @@ def global_smallest_filter_mean(parameters: prune.Iterable, amount: float, **kwa
         prune.custom_from_mask(module, name, mask=mask)
         if module.bias != None:
             prune.custom_from_mask(module, 'bias', mask=bias_mask)
-        #     prune.remove(module, 'bias')
-        # prune.remove(module, name)
+            prune.remove(module, 'bias')
+        prune.remove(module, name)
         
 def global_smallest_filter_norm(parameters: prune.Iterable, amount: float, norm: Optional[Literal['1', '2', 'inf']] = 1, **kwargs):
     # Ensure parameters is a list or generator of tuples
@@ -339,10 +351,10 @@ def global_smallest_filter_norm(parameters: prune.Iterable, amount: float, norm:
     # Create importance scores
     importance_scores = [
         torch.vstack([
-            torch.norm(module.weight, norm, (1, 2, 3)).to(module.weight.device),
-            torch.range(0, module.weight.shape[0] - 1).to(module.weight.device),
-            (torch.ones(module.weight.shape[0]) * i).to(module.weight.device),
-            torch.ones(module.weight.shape[0]).to(module.weight.device) * (module.kernel_size[0]*module.kernel_size[1]*module.in_channels)
+            torch.norm(module.weight, norm, (1, 2, 3)).to(module.weight.device), # score
+            torch.range(0, module.weight.shape[0] - 1).to(module.weight.device), # filter idx
+            (torch.ones(module.weight.shape[0]) * i).to(module.weight.device), # module idx
+            torch.ones(module.weight.shape[0]).to(module.weight.device) * (module.kernel_size[0]*module.kernel_size[1]*module.weight.shape[1]) # filter size
         ])
         for i, (module, param) in enumerate(parameters)
     ]
@@ -390,5 +402,5 @@ def global_smallest_filter_norm(parameters: prune.Iterable, amount: float, norm:
         prune.custom_from_mask(module, name, mask=mask)
         if module.bias != None:
             prune.custom_from_mask(module, 'bias', mask=bias_mask)
-        #     prune.remove(module, 'bias')
-        # prune.remove(module, name)
+            prune.remove(module, 'bias')
+        prune.remove(module, name)
