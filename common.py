@@ -24,6 +24,18 @@ def get_val_transforms(mean: Sequence[int], std: Sequence[int]):
 def get_dependency_graph(model: nn.Module, name: str):
     if name.startswith('cifar100_vgg'):
         return get_dependency_graph_vgg(model)
+    elif name.startswith('cifar100_resnet'):
+        return get_dependency_graph_resnet(model)
+    elif name.startswith('cifar100_mobilenet'):
+        return get_dependency_graph_mobilenet(model)
+    
+def get_residual_dependency(model: nn.Module, name: str):
+    if name.startswith('cifar100_vgg'):
+        return {}
+    elif name.startswith('cifar100_resnet'):
+        return get_residual_dependency_resnet(model)
+    elif name.startswith('cifar100_mobilenet'):
+        return {}
     
 def get_dependency_graph_vgg(vgg: nn.Module):
     dependencies = {}
@@ -36,11 +48,49 @@ def get_dependency_graph_vgg(vgg: nn.Module):
         prev_module = module
     return dependencies
 
+def get_dependency_graph_resnet(resnet: nn.Module):
+    dependencies = {}
+    for name, module in resnet.named_modules():
+        if isinstance(module, nn.Conv2d) and name.endswith('conv2'):
+            dependencies[name] = f'{name[:-5]}conv1'
+    return dependencies
+    
+def get_residual_dependency_resnet(resnet: nn.Module):
+    dependencies = {}
+    for name, module in resnet.named_modules():
+        if isinstance(module, nn.Conv2d) and 'downsample' in name:
+            dependencies[f'{name[:-12]}conv2'] = name
+    return dependencies
+
+def get_dependency_graph_mobilenet(mobnet: nn.Module):
+    raise NotImplementedError
+
 def get_parameters_to_prune(model: nn.Module, name: str):
     if name.startswith('cifar100_vgg'):
         parameters_to_prune = [
             (val, 'weight') for key, val in model.features.named_modules() if isinstance(val, torch.nn.Conv2d)
         ]
+        return parameters_to_prune
+    
+    elif name.startswith('cifar100_resnet'):
+        parameters_to_prune = []
+
+        for name, module in model.named_modules():
+            if isinstance(module, nn.Conv2d) and name.endswith('conv1'):
+                parameters_to_prune.append((module, 'weight'))
+                
+            if isinstance(module, nn.Conv2d) and 'downsample' in name:
+                parameters_to_prune.append((module, 'weight'))
+        
+        return parameters_to_prune
+    
+    elif name.startswith('cifar100_mobilenet'):
+        parameters_to_prune = []
+
+        for name, module in model.named_modules():
+            if isinstance(module, nn.Conv2d) and not (name.endswith('2') and not name.startswith('features.17')):
+                parameters_to_prune.append(module, 'weight')
+                
         return parameters_to_prune
 
 def get_name_to_module(model: nn.Module):
@@ -147,7 +197,7 @@ def prune_kernel2(module: nn.Conv2d, dep: nn.Conv2d):
     # dependency = getattr(module, 'dependency', None)
     # if dependency == None:
     #     return
-    pruned_indices = (torch.norm(dep.weight.data, 1, (1, 2, 3)) == 0).nonzero().view(-1)
+    pruned_indices = (torch.norm(dep.weight_mask, 1, (1, 2, 3)) == 0).nonzero().view(-1)
     if pruned_indices.numel() == 0:
         return
     
@@ -177,6 +227,22 @@ def prune_kernel(module: nn.Conv2d):
     # prune.remove(module, 'weight')
     return None
 
+def prune_residual_filter(module: nn.Conv2d, dep: nn.Conv2d):
+    pruned_indices = (torch.norm(dep.weight_mask, 1, (1, 2, 3)) == 0).nonzero().view(-1)
+    if pruned_indices.numel() == 0:
+        raise ValueError
+    
+    # Update the mask of the current layer
+    mask = getattr(module, 'weight_mask', torch.ones_like(module.weight.data))
+    mask[pruned_indices, :, :, :] = 0
+    prune.custom_from_mask(module, 'weight', mask=mask)    
+    
+def global_smallest_filter(parameters: prune.Iterable, amount: float, mode: Optional[Literal['mean', '1', '2', 'inf']]):
+    if mode == 'mean':
+        global_smallest_filter_mean(parameters, amount)
+    else:
+        global_smallest_filter_norm(parameters, amount, norm=mode)
+    
 def global_smallest_filter_mean(parameters: prune.Iterable, amount: float, **kwargs):
     # Ensure parameters is a list or generator of tuples
     if not isinstance(parameters, prune.Iterable):

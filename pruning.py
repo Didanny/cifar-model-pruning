@@ -35,35 +35,31 @@ def main(opt):
     
     # Setup
     dependencies = get_dependency_graph(model, opt.model)
+    residual_dependencies = get_residual_dependency(model, opt.model)
     parameters_to_prune = get_parameters_to_prune(model, opt.model)
-    parameters_to_prune = [
-        (val, 'weight') for key, val in model.features.named_modules() if isinstance(val, torch.nn.Conv2d)
-    ]
     name_to_module = get_name_to_module(model)
     
+    # Get the initial accuracy
+    print('Initial validation')
+    print(validate(val_loader, model))
+    
     # Run exploration
+    print('Starting exploration...')
     delta = 0.005
     i = 0.005
-    if opt.mode == 'mean':
-        while i < 0.51:
-            print(f'Sparsity={i}')
-            global_smallest_filter_mean(parameters_to_prune, i)
-            for key in dependencies:
-                mod = name_to_module[key]
-                mod_dep = name_to_module[dependencies[key]]
-                prune_kernel2(mod, mod_dep)
-            print(validate(val_loader, model))
-            i += delta
-    else:
-        while i < 0.51:
-            print(f'Sparsity={i}')
-            global_smallest_filter_norm(parameters_to_prune, i, opt.mode)
-            for key in dependencies:
-                mod = name_to_module[key]
-                mod_dep = name_to_module[dependencies[key]]
-                prune_kernel2(mod, mod_dep)
-            print(validate(val_loader, model))
-            i += delta
+    while i < 0.51:
+        print(f'Sparsity={i}')
+        global_smallest_filter(parameters_to_prune, i, opt.mode)
+        for key in dependencies:
+            mod = name_to_module[key]
+            mod_dep = name_to_module[dependencies[key]]
+            prune_kernel2(mod, mod_dep)
+        for key in residual_dependencies:
+            mod = name_to_module[key] 
+            mod_dep = name_to_module[residual_dependencies[key]]
+            prune_residual_filter(mod, mod_dep)
+        print(validate(val_loader, model))
+        i += delta
         
         
 if __name__ == '__main__':
