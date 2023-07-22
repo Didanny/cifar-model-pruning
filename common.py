@@ -1,4 +1,5 @@
 import contextlib
+import re
 import time
 import torch
 import pytorch_cifar_models
@@ -14,6 +15,14 @@ from typing_extensions import Literal, TypeAlias
 from tqdm import tqdm
 
 DATA_DIR = Path('./data')
+
+def dot_num_to_brack(match):
+    # print(match)
+    return f'[{match.group()[1:-1]}].'
+
+def dot_num_to_brack_end(match):
+    # print(match)
+    return f'[{match.group()[1:]}]'
 
 def get_val_transforms(mean: Sequence[int], std: Sequence[int]):
     return T.Compose([
@@ -36,6 +45,31 @@ def get_residual_dependency(model: nn.Module, name: str):
         return get_residual_dependency_resnet(model)
     elif name.startswith('cifar100_mobilenet'):
         return {}
+    
+def fuse_batchnorms(model: nn.Module, name: str):
+    if name.startswith('cifar100_vgg'):
+        for i in range(len(model.features)):
+            if isinstance(model.features[i], nn.Conv2d) and isinstance(model.features[i + 1], nn.BatchNorm2d):
+                model.features[i] = fuse_conv_and_bn(model.features[i], model.features[i + 1])
+                model.features[i].requires_grad = False
+                model.features[i + 1] = nn.Identity()
+    elif name.startswith('cifar100_resnet'):
+        raise NotImplementedError
+    elif name.startswith('cifar100_mobilenet'):
+        raise NotImplementedError
+    
+def transfer_masks(model_fuse: nn.Module, model: nn.Module, name: str):
+    if name.startswith('cifar100_vgg'):
+        for i in range(len(model_fuse.features)):
+            if isinstance(model_fuse.features[i], nn.Conv2d):
+                conv = model.features[i]
+                prune.custom_from_mask(model_fuse.features[i], 'weight', mask=conv.weight_mask.data)
+                bias_mask = getattr(conv, 'bias_mask', torch.ones_like(model_fuse.features[i].bias))
+                prune.custom_from_mask(model_fuse.features[i], 'bias', mask=bias_mask)
+    elif name.startswith('cifar100_resnet'):
+        raise NotImplementedError
+    elif name.startswith('cifar100_mobilenet'):
+        raise NotImplementedError
     
 def get_dependency_graph_vgg(vgg: nn.Module):
     dependencies = {}
@@ -118,12 +152,45 @@ def get_num_pruned_parameters(params: list[tuple[nn.Module, Literal]]):
     return num_pruned
     
 def get_kernel_indices(module: nn.Module, pruned: Optional[bool] = True):
-    val = 0 if pruned else 1    
-    return (torch.norm(module.weight_mask.data, 1, (0, 2, 3)) == val).nonzero().view(-1) 
+    check = (lambda x: x==0) if pruned else (lambda x: x!=0) 
+    return (check(torch.norm(module.weight.data, 1, (0, 2, 3)))).nonzero().view(-1) 
 
 def get_filter_indices(module: nn.Module, pruned: Optional[bool] = True):
-    val = 0 if pruned else 1    
-    return (torch.norm(module.weight_mask.data, 1, (1, 2, 3)) == val).nonzero().view(-1)        
+    check = (lambda x: x==0) if pruned else (lambda x: x!=0)    
+    return (check(torch.norm(module.weight.data, 1, (1, 2, 3)))).nonzero().view(-1)   
+
+def fuse_conv_and_bn(conv: nn.Conv2d, bn: nn.BatchNorm2d, remove: Optional[bool] = True):
+    # Fuse Conv2d() and BatchNorm2d() layers https://tehnokv.com/posts/fusing-batchnorm-and-conv/
+    fusedconv = nn.Conv2d(conv.in_channels,
+                          conv.out_channels,
+                          kernel_size=conv.kernel_size,
+                          stride=conv.stride,
+                          padding=conv.padding,
+                          dilation=conv.dilation,
+                          groups=conv.groups,
+                          bias=True).requires_grad_(False).to(conv.weight.device)
+
+    # Prepare filters
+    # print(f'before {fusedconv.weight.is_leaf}')
+    w_conv = conv.weight.clone().view(conv.out_channels, -1)
+    w_bn = torch.diag(bn.weight.div(torch.sqrt(bn.eps + bn.running_var)))
+    fusedconv.weight.data = (torch.mm(w_bn, w_conv).view(fusedconv.weight.shape))
+    # print(f'after {fusedconv.weight.is_leaf}')
+
+    # Prepare spatial bias
+    b_conv = torch.zeros(conv.weight.size(0), device=conv.weight.device) if conv.bias is None else conv.bias
+    b_bn = bn.bias - bn.weight.mul(bn.running_mean).div(torch.sqrt(bn.running_var + bn.eps))
+    fusedconv.bias.data = (torch.mm(w_bn, b_conv.reshape(-1, 1)).reshape(-1) + b_bn)
+    
+    # Prune fused layer
+    prune.custom_from_mask(fusedconv, 'weight', mask=conv.weight_mask.data)
+    bias_mask = getattr(conv, 'bias_mask', torch.ones_like(fusedconv.bias))
+    prune.custom_from_mask(fusedconv, 'bias', mask=bias_mask)
+    if remove:
+        prune.remove(fusedconv, 'weight')
+        prune.remove(fusedconv, 'bias')
+
+    return fusedconv     
     
 def embed_dependencies(model: nn.Module, 
                        dependencies: dict[Literal, Literal], 
@@ -324,8 +391,8 @@ def global_smallest_filter_mean(parameters: prune.Iterable, amount: float, **kwa
         prune.custom_from_mask(module, name, mask=mask)
         if module.bias != None:
             prune.custom_from_mask(module, 'bias', mask=bias_mask)
-            prune.remove(module, 'bias')
-        prune.remove(module, name)
+        #     prune.remove(module, 'bias')
+        # prune.remove(module, name)
         
 def global_smallest_filter_norm(parameters: prune.Iterable, amount: float, norm: Optional[Literal['1', '2', 'inf']] = 1, **kwargs):
     # Ensure parameters is a list or generator of tuples
@@ -402,5 +469,60 @@ def global_smallest_filter_norm(parameters: prune.Iterable, amount: float, norm:
         prune.custom_from_mask(module, name, mask=mask)
         if module.bias != None:
             prune.custom_from_mask(module, 'bias', mask=bias_mask)
-            prune.remove(module, 'bias')
-        prune.remove(module, name)
+        #     prune.remove(module, 'bias')
+        # prune.remove(module, name)
+        
+def remove_kernels_from_conv2d(conv, indices):
+    # Make sure layer is a conv 2d layer
+    if not isinstance(conv, nn.Conv2d):
+        raise TypeError(f'Expected type nn.Conv2d, instead got {type(conv)}')
+    
+    # Get the parameters of the Conv2d layer
+    weight = conv.weight
+    bias = conv.bias
+    in_channels = conv.in_channels
+    out_channels = conv.out_channels
+    kernel_size = conv.kernel_size
+    stride = conv.stride
+    padding = conv.padding
+    
+    # Get the cropped weight and bias
+    cropped_weight = weight.data[:, indices, :, :]
+    
+    # Re-initialize the module and set the weights and biases
+    new_conv = nn.Conv2d(cropped_weight.shape[1], out_channels, kernel_size, stride=stride, padding=padding)
+    new_conv.weight.data = cropped_weight
+    new_conv.bias.data = bias.data if bias != None else torch.zeros_like(new_conv.bias.data)
+    new_conv.weight.requires_grad = False
+    new_conv.bias.requires_grad = False
+    
+    # Return the new module
+    return new_conv
+
+def remove_filters_from_conv2d(conv, indices):
+    # Make sure layer is a conv 2d layer
+    if not isinstance(conv, nn.Conv2d):
+        raise TypeError(f'Expected type nn.Conv2d, instead got {type(conv)}')
+    
+    # Get the parameters of the Conv2d layer
+    weight = conv.weight
+    bias = conv.bias
+    in_channels = conv.in_channels
+    out_channels = conv.out_channels
+    kernel_size = conv.kernel_size
+    stride = conv.stride
+    padding = conv.padding
+    
+    # Get the cropped weight and bias
+    cropped_weight = weight.data[indices, :, :, :]
+    cropped_bias = bias.data[indices] if bias != None else None
+    
+    # Re-initialize the module and set the weights and biases
+    new_conv = nn.Conv2d(in_channels, cropped_weight.shape[0], kernel_size, stride=stride, padding=padding)
+    new_conv.weight.data = cropped_weight
+    new_conv.bias.data = cropped_bias if cropped_bias != None else torch.zeros_like(new_conv.bias.data)
+    new_conv.weight.requires_grad = False
+    new_conv.bias.requires_grad = False
+    
+    # Return the new module
+    return new_conv

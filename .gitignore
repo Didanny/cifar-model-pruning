@@ -169,7 +169,7 @@ data/*
 *.onnx
 
 # Misc
-testing.ipynb
+testing*
 test.py
 run.sh
 *.txt

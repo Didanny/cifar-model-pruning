@@ -41,7 +41,7 @@ def main(opt):
     
     # Get the initial accuracy
     print('Initial validation')
-    # print(validate(val_loader, model))
+    print(validate(val_loader, model))
     
     # Run exploration
     print('Starting exploration...')
@@ -58,7 +58,13 @@ def main(opt):
             mod = name_to_module[key] 
             mod_dep = name_to_module[residual_dependencies[key]]
             prune_residual_filter(mod, mod_dep)
-        print(validate(val_loader, model))
+            
+        # Get a fused model for validation
+        model_fuse = getattr(pytorch_cifar_models, opt.model)(pretrained=True)
+        model_fuse.eval()
+        transfer_masks(model_fuse, model, opt.model)
+        fuse_batchnorms(model_fuse, opt.model)
+        print(validate(val_loader, model_fuse))
         print(get_num_pruned_parameters(parameters_to_prune))
         i += delta
         
