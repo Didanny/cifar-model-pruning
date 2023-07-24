@@ -174,3 +174,4 @@ test.py
 run.sh
 *.txt
 *.sh
+*.csv

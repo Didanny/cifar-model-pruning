@@ -27,6 +27,22 @@
             ]
         },
         {
+            "name": "vgg11_comp_inf",
+            "type": "python",
+            "request": "launch",
+            "program": "comp_inf_time.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
+                "--model", 
+                "cifar100_vgg11_bn",
+                "--mode",
+                "inf",
+                "thresh",
+                "0.175",
+            ]
+        },
+        {
             "name": "test",
             "type": "python",
             "request": "launch",

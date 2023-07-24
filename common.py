@@ -46,11 +46,11 @@ def get_residual_dependency(model: nn.Module, name: str):
     elif name.startswith('cifar100_mobilenet'):
         return {}
     
-def fuse_batchnorms(model: nn.Module, name: str):
+def fuse_batchnorms(model: nn.Module, name: str, **kwargs):
     if name.startswith('cifar100_vgg'):
         for i in range(len(model.features)):
             if isinstance(model.features[i], nn.Conv2d) and isinstance(model.features[i + 1], nn.BatchNorm2d):
-                model.features[i] = fuse_conv_and_bn(model.features[i], model.features[i + 1])
+                model.features[i] = fuse_conv_and_bn(model.features[i], model.features[i + 1], **kwargs)
                 model.features[i].requires_grad = False
                 model.features[i + 1] = nn.Identity()
     elif name.startswith('cifar100_resnet'):
@@ -58,7 +58,15 @@ def fuse_batchnorms(model: nn.Module, name: str):
     elif name.startswith('cifar100_mobilenet'):
         raise NotImplementedError
     
-def transfer_masks(model_fuse: nn.Module, model: nn.Module, name: str):
+def compress_model(model: nn.Module, name: str, **kwargs):
+    if name.startswith('cifar100_vgg'):
+        compress_model_vgg(model, **kwargs)
+    elif name.startswith('cifar100_resnet'):
+        raise NotImplementedError
+    elif name.startswith('cifar100_mobilenet'):
+        raise NotImplementedError
+    
+def transfer_masks(model_fuse: nn.Module, model: nn.Module, name: str, **kwargs):
     if name.startswith('cifar100_vgg'):
         for i in range(len(model_fuse.features)):
             if isinstance(model_fuse.features[i], nn.Conv2d):
@@ -134,6 +142,56 @@ def get_parameters_to_prune(model: nn.Module, name: str):
                 parameters_to_prune.append((module, 'weight'))
                 
         return parameters_to_prune
+    
+def compress_model_vgg(vgg: nn.Module, **kwargs):
+    i_s = []
+    for i in range(len(vgg.features)):
+        if isinstance(vgg.features[i], nn.Conv2d):
+            i_s.append(i)
+            
+    profiler = Profile()
+    indexing_time = Profile()
+    with profiler:
+        for i in i_s:
+            conv = vgg.features[i]
+            with indexing_time:
+                kernel_indices = get_kernel_indices(conv, pruned=False)
+                filter_indices = get_filter_indices(conv, pruned=False)
+            
+            weight = conv.weight.data
+            bias = conv.bias.data
+            stride = conv.stride
+            padding = conv.padding
+            kernel_size = conv.kernel_size
+            
+            vgg.features[i] = nn.Conv2d(kernel_indices.size()[0], filter_indices.size()[0], kernel_size, stride, padding)
+            vgg.features[i].weight.data = weight[filter_indices, :, :, :][:, kernel_indices, :, :]
+            vgg.features[i].bias.data = bias[filter_indices]
+        
+        # i = i_s[-1]
+        # conv = model.features[i]
+        # kernel_indices = get_kernel_indices(conv, pruned=False)
+        # filter_indices = get_filter_indices(conv, pruned=False)
+
+        # weight = conv.weight.data
+        # bias = conv.bias.data
+        # stride = conv.stride
+        # padding = conv.padding
+        # kernel_size = conv.kernel_size
+
+        # model.features[i] = nn.Conv2d(kernel_indices.size()[0], conv.out_channels, kernel_size, stride, padding)
+        # model.features[i].weight.data = weight[:, kernel_indices, :, :]
+        # model.features[i].bias.data = bias
+        
+        fc = vgg.classifier[0]
+        
+        weight = fc.weight.data
+        bias = fc.bias.data
+        out_features = fc.out_features
+        
+        vgg.classifier[0] = nn.Linear(filter_indices.size()[0], fc.out_features, bias=True)
+        vgg.classifier[0].weight.data = weight[:, filter_indices]
+        vgg.classifier[0].bias.data = bias
 
 def get_name_to_module(model: nn.Module):
     return dict((name, module) for name, module in model.named_modules()
@@ -159,7 +217,7 @@ def get_filter_indices(module: nn.Module, pruned: Optional[bool] = True):
     check = (lambda x: x==0) if pruned else (lambda x: x!=0)    
     return (check(torch.norm(module.weight.data, 1, (1, 2, 3)))).nonzero().view(-1)   
 
-def fuse_conv_and_bn(conv: nn.Conv2d, bn: nn.BatchNorm2d, remove: Optional[bool] = True):
+def fuse_conv_and_bn(conv: nn.Conv2d, bn: nn.BatchNorm2d, prune_: Optional[bool] = True, remove: Optional[bool] = True):
     # Fuse Conv2d() and BatchNorm2d() layers https://tehnokv.com/posts/fusing-batchnorm-and-conv/
     fusedconv = nn.Conv2d(conv.in_channels,
                           conv.out_channels,
@@ -183,10 +241,11 @@ def fuse_conv_and_bn(conv: nn.Conv2d, bn: nn.BatchNorm2d, remove: Optional[bool]
     fusedconv.bias.data = (torch.mm(w_bn, b_conv.reshape(-1, 1)).reshape(-1) + b_bn)
     
     # Prune fused layer
-    prune.custom_from_mask(fusedconv, 'weight', mask=conv.weight_mask.data)
-    bias_mask = getattr(conv, 'bias_mask', torch.ones_like(fusedconv.bias))
-    prune.custom_from_mask(fusedconv, 'bias', mask=bias_mask)
-    if remove:
+    if prune_:
+        prune.custom_from_mask(fusedconv, 'weight', mask=conv.weight_mask.data)
+        bias_mask = getattr(conv, 'bias_mask', torch.ones_like(fusedconv.bias))
+        prune.custom_from_mask(fusedconv, 'bias', mask=bias_mask)
+    if prune_ and remove:
         prune.remove(fusedconv, 'weight')
         prune.remove(fusedconv, 'bias')
 
@@ -234,6 +293,38 @@ def validate(data: data.DataLoader, model: nn.Module):
         with profile:
             predictions = model(datum)
         seen += datum.shape[0]
+        accuracy_top1.update(predictions, target)
+        accuracy_top5.update(predictions, target)
+        
+    # Get the inference times
+    total_time_s = profile.t
+    single_inference_time_ms = profile.t / seen * 1E3
+    
+    # Return results
+    return  total_time_s, \
+            single_inference_time_ms, \
+            accuracy_top1.compute(), \
+            accuracy_top5.compute()
+            
+def validate_onnx(data: data.DataLoader, model: any):
+    # Set up the quality metrics
+    # TODO: Remove hard-coded num_classes
+    accuracy_top1 = Accuracy(task='multiclass', num_classes=100)
+    accuracy_top5 = Accuracy(task='multiclass', num_classes=100, top_k=5)
+    
+    # Set up the profiler
+    profile = Profile()
+    
+    # Set up progress bar
+    pbar = tqdm(data)
+    
+    # Validate
+    seen = 0
+    for datum, target in pbar:
+        with profile:
+            predictions = model.run(None, {'input': datum.numpy()})
+        seen += datum.shape[0]
+        predictions = torch.tensor(predictions[0])
         accuracy_top1.update(predictions, target)
         accuracy_top5.update(predictions, target)
         
