@@ -16,6 +16,59 @@ from tqdm import tqdm
 
 DATA_DIR = Path('./data')
 
+def get_train_transforms(mean, std):
+    return T.Compose([
+        T.RandomCrop(32, padding=4),
+        T.RandomHorizontalFlip(),
+        T.ToTensor(),
+        T.Normalize(mean=mean, std=std)
+    ])
+
+def get_val_transforms(mean, std):
+    return T.Compose([
+        T.ToTensor(),
+        T.Normalize(mean=mean, std=std)
+    ])
+
+def _cifar(root, image_size, mean, std, batch_size, num_workers, dataset_builder, **kwargs):
+    train_transforms = get_train_transforms(mean, std)
+    val_transforms = get_val_transforms(mean, std)
+
+    trainset = dataset_builder(root, train=True, transform=train_transforms, download=True)
+    valset = dataset_builder(root, train=False, transform=val_transforms, download=True)
+
+    # TODO: Maybe add support for distributed runs
+    train_sampler = None
+    val_sampler = None
+
+    train_loader = data.DataLoader(trainset, batch_size=batch_size,
+                                   shuffle=(train_sampler is None),
+                                   sampler=train_sampler,
+                                   num_workers=num_workers,
+                                   persistent_workers=True)
+    val_loader = data.DataLoader(valset, batch_size=batch_size,
+                                 shuffle=(val_sampler is None),
+                                 sampler=val_sampler,
+                                 num_workers=num_workers,
+                                 persistent_workers=True)
+
+    return train_loader, val_loader
+
+def cifar100():
+    return _cifar(
+        root=DATA_DIR,
+        image_size=32,
+        mean=[0.5070, 0.4865, 0.4409],
+        std=[0.2673, 0.2564, 0.2761],
+        batch_size=256,
+        num_workers=4,
+        dataset_builder=CIFAR100,
+    )
+    
+def get_data_loaders(dataset_name: str):
+    if dataset_name == 'cifar100':
+        return cifar100()
+
 def dot_num_to_brack(match):
     # print(match)
     return f'[{match.group()[1:-1]}].'
@@ -24,11 +77,11 @@ def dot_num_to_brack_end(match):
     # print(match)
     return f'[{match.group()[1:]}]'
 
-def get_val_transforms(mean: Sequence[int], std: Sequence[int]):
-    return T.Compose([
-        T.ToTensor(),
-        T.Normalize(mean, std)
-    ])
+# def get_val_transforms(mean: Sequence[int], std: Sequence[int]):
+#     return T.Compose([
+#         T.ToTensor(),
+#         T.Normalize(mean, std)
+#     ])
     
 def get_dependency_graph(model: nn.Module, name: str):
     if name.startswith('cifar100_vgg'):
