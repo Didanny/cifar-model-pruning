@@ -46,7 +46,7 @@ def prepare_for_training(device, model):
     
     # Intialize the scheduler
     # TODO: Make T_max a user-defined
-    scheduler = CosineAnnealingLR(optimizer=optimizer, T_max=30, eta_min=0)
+    scheduler = CosineAnnealingLR(optimizer=optimizer, T_max=300, eta_min=0)
     
     # Return 
     return model, criterion, optimizer, scheduler, train_loader, val_loader
@@ -140,6 +140,12 @@ def main(opt):
     for pruning_step in range(9):
         # Prune the model once
         prune_filters(model, opt.model)
+        
+        # Initialize best model metrics
+        best_dict = None
+        best_loss = 10_000
+        best_acc1 = 0
+        best_acc5 = 0
     
         # The initial evaluation
         loss_eval, acc_1, acc_5 = evaluate(model, criterion, val_loader, device, pruning_step)
@@ -159,6 +165,14 @@ def main(opt):
             # Eval
             loss_eval, acc_1, acc_5 = evaluate(model, criterion, val_loader, device, epoch)
             
+            # Update best model metrics
+            if loss_eval < best_loss:
+                best_loss = loss_eval
+                best_dict = model.state_dict()
+                best_acc1 = acc_1
+                best_acc5 = acc_5
+                
+            
             # Tensorboard
             writer.add_scalar('Training/Loss', loss_train, global_step)
             writer.add_scalar('Validation/Loss', loss_eval, global_step)
@@ -166,7 +180,10 @@ def main(opt):
             writer.add_scalar('Validation/Accuracy (Top-5)', acc_5, global_step)
             
             # Increment global step
-            global_step += 1        
+            global_step += 1
+            
+        # Save the best model of this pruning step
+        torch.save(best_dict, f'{opt.model}_{pruning_step}_loss{best_loss}_acco{best_acc1}_accf{best_acc5}')
     
 
 if __name__ == '__main__':
