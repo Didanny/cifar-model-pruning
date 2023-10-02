@@ -61,9 +61,21 @@ def cifar100():
         mean=[0.5070, 0.4865, 0.4409],
         std=[0.2673, 0.2564, 0.2761],
         batch_size=256,
-        num_workers=4,
+        num_workers=2,
         dataset_builder=CIFAR100,
     )
+    
+def prune_filters(model: nn.Module, model_name: str):
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Conv2d):
+            prune.ln_structured(module, 'weight', 0.1, float('inf'), 1)
+            
+            if module.bias != None:
+                bias_mask = torch.ones_like(module.bias, device=model.bias.device)
+                filter_indices = get_filter_indices(module.weight)
+                bias_mask[filter_indices] = 0
+                prune.custom_from_mask(module, 'bias', bias_mask)
+                
     
 def get_data_loaders(dataset_name: str):
     if dataset_name == 'cifar100':
