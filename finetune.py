@@ -75,7 +75,12 @@ def train(model, criterion, optimizer, scheduler, train_loader, device, epoch):
         
         scheduler.step()
         
-    print(f'Training Loss = {running_loss / len(train_loader)}')  
+    # Record results
+    running_loss = running_loss / len(train_loader)
+    print(f'Training Loss = {running_loss}')  
+    
+    # Return results
+    return running_loss
     
 @torch.no_grad()
 def evaluate(model, criterion, val_loader, device, epoch):
@@ -86,7 +91,7 @@ def evaluate(model, criterion, val_loader, device, epoch):
     running_loss = 0.0
     
     # Run 1 epoch
-    for i, data in enumerate(tqdm(val_loader, desc=f'Training Epoch {epoch}'), 0):
+    for i, data in enumerate(tqdm(val_loader, desc=f'Validation Epoch {epoch}'), 0):
         inputs, labels = data
         inputs = inputs.to(device=device, non_blocking=True)
         labels = labels.to(device=device, non_blocking=True)
@@ -99,11 +104,18 @@ def evaluate(model, criterion, val_loader, device, epoch):
 
         running_loss += loss
         
-    print(f'Validation Loss = {running_loss / len(val_loader)}, Accuracy (Top-1): {model.accuracy_top1.compute()}, Accuracy (Top-5): {model.accuracy_top5.compute()}')     
+    # Record results
+    running_loss = running_loss / len(val_loader)
+    acc_1 = model.accuracy_top1.compute()
+    acc_5 = model.accuracy_top5.compute()
+    print(f'Validation Loss = {running_loss}, Accuracy (Top-1): {acc_1}, Accuracy (Top-5): {acc_5}')     
     
     # Reset the metrics 
     model.accuracy_top1.reset()
     model.accuracy_top5.reset()
+    
+    # Return results
+    return running_loss, acc_1, acc_5
     
 def main(opt):    
     # Get the current device
@@ -113,6 +125,10 @@ def main(opt):
         device = torch.device('cpu')
     print(f'Using device: {device}')
     
+    # Set up tensorboard summary writer
+    # TODO: Create more comprhensive automated commenting
+    writer = SummaryWriter(comment=opt.model)
+    
     # Set up training
     model, criterion, optimizer, scheduler, train_loader, val_loader = prepare_for_training(device, opt.model)
     
@@ -120,21 +136,37 @@ def main(opt):
     evaluate(model, criterion, val_loader, device, 0)
     
     # Begine Fine-tuning
+    global_step = 0
     for pruning_step in range(9):
         # Prune the model once
         prune_filters(model, opt.model)
     
         # The initial evaluation
-        evaluate(model, criterion, val_loader, device, 0)
+        loss_eval, acc_1, acc_5 = evaluate(model, criterion, val_loader, device, pruning_step)
+        global_step += 1
+        
+        # Tensorboard
+        writer.add_scalar('Validation/Loss', loss_eval, global_step)
+        writer.add_scalar('Validation/Accuracy (Top-1)', acc_1, global_step)
+        writer.add_scalar('Validation/Accuracy (Top-5)', acc_5, global_step)
 
         # Begin Training
         # TODO: Make num_epochs user-defined (Make sure same arg is used for T_max in scheduler)
-        for epoch in range(1, 31):
+        for epoch in range(30):
             # Train
-            train(model, criterion, optimizer, scheduler, train_loader, device, epoch)
+            loss_train = train(model, criterion, optimizer, scheduler, train_loader, device, epoch)
             
             # Eval
-            evaluate(model, criterion, val_loader, device, epoch)        
+            loss_eval, acc_1, acc_5 = evaluate(model, criterion, val_loader, device, epoch)
+            
+            # Tensorboard
+            writer.add_scalar('Training/Loss', loss_train, global_step)
+            writer.add_scalar('Validation/Loss', loss_eval, global_step)
+            writer.add_scalar('Validation/Accuracy (Top-1)', acc_1, global_step)
+            writer.add_scalar('Validation/Accuracy (Top-5)', acc_5, global_step)
+            
+            # Increment global step
+            global_step += 1        
     
 
 if __name__ == '__main__':
