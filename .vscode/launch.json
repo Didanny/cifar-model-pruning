@@ -49,6 +49,18 @@
             "program": "test.py",
             "console": "integratedTerminal",
             "justMyCode": false
+        },
+        {
+            "name": "finetune",
+            "type": "python",
+            "request": "launch",
+            "program": "finetune.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
+                "--model", 
+                "cifar100_vgg11_bn",
+            ]
         }
     ]
 }

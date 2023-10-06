@@ -164,6 +164,7 @@ data/*
 
 # Log files
 *.out
+runs/
 
 # ONNX
 *.onnx
@@ -175,3 +176,4 @@ run.sh
 *.txt
 *.sh
 *.csv
+*.pt

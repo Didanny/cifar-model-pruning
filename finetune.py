@@ -42,11 +42,13 @@ def prepare_for_training(device, model):
         
     # Initialize optimizer
     # TODO: Make parameters user-defined
-    optimizer = optim.SGD([v for n, v in model.named_parameters()], 0.1, 0.9, 0, 5e-4, True)
+    # optimizer = optim.SGD([v for n, v in model.named_parameters()], 0.001, 0.9, 0, 5e-4, True)
+    optimizer = optim.SGD([v for n, v in model.named_parameters()], lr=0.001, momentum=0.9, weight_decay=5e-4)
     
     # Intialize the scheduler
     # TODO: Make T_max a user-defined
-    scheduler = CosineAnnealingLR(optimizer=optimizer, T_max=300, eta_min=0)
+    # scheduler = CosineAnnealingLR(optimizer=optimizer, T_max=300, eta_min=0)
+    scheduler = None
     
     # Return 
     return model, criterion, optimizer, scheduler, train_loader, val_loader
@@ -73,7 +75,7 @@ def train(model, criterion, optimizer, scheduler, train_loader, device, epoch):
         running_loss += loss
         optimizer.step()
         
-        scheduler.step()
+        # scheduler.step()
         
     # Record results
     running_loss = running_loss / len(train_loader)
@@ -128,6 +130,7 @@ def main(opt):
     # Set up tensorboard summary writer
     # TODO: Create more comprhensive automated commenting
     writer = SummaryWriter(comment=opt.model)
+    log_dir = writer.log_dir
     
     # Set up training
     model, criterion, optimizer, scheduler, train_loader, val_loader = prepare_for_training(device, opt.model)
@@ -137,9 +140,17 @@ def main(opt):
     
     # Begine Fine-tuning
     global_step = 0
-    for pruning_step in range(9):
+    for pruning_step in range(13):
         # Prune the model once
-        prune_filters(model, opt.model)
+        if pruning_step <= 8:
+            prune_filters(model, opt.model, 0.1)
+        else:
+            prune_filters(model, opt.model, 0.02)
+            
+        # Get the sparsity
+        total_params = get_num_parameters(model)
+        masked_params = get_num_masked_parameters(model)
+        model_sparsity =  100 * (1 - ((total_params - masked_params) / total_params))
         
         # Initialize best model metrics
         best_dict = None
@@ -155,6 +166,7 @@ def main(opt):
         writer.add_scalar('Validation/Loss', loss_eval, global_step)
         writer.add_scalar('Validation/Accuracy (Top-1)', acc_1, global_step)
         writer.add_scalar('Validation/Accuracy (Top-5)', acc_5, global_step)
+        writer.add_scalar('Sparsity (%)', model_sparsity, global_step)
 
         # Begin Training
         # TODO: Make num_epochs user-defined (Make sure same arg is used for T_max in scheduler)
@@ -178,12 +190,13 @@ def main(opt):
             writer.add_scalar('Validation/Loss', loss_eval, global_step)
             writer.add_scalar('Validation/Accuracy (Top-1)', acc_1, global_step)
             writer.add_scalar('Validation/Accuracy (Top-5)', acc_5, global_step)
+            writer.add_scalar('Sparsity (%)', model_sparsity, global_step)
             
             # Increment global step
             global_step += 1
             
         # Save the best model of this pruning step
-        torch.save(best_dict, f'{opt.model}_{pruning_step}_loss{best_loss}_acco{best_acc1}_accf{best_acc5}')
+        torch.save(best_dict, f'{log_dir}/{opt.model}_{pruning_step}_loss{best_loss}_acco{best_acc1}_accf{best_acc5}.pt')
     
 
 if __name__ == '__main__':

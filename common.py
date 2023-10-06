@@ -65,14 +65,14 @@ def cifar100():
         dataset_builder=CIFAR100,
     )
     
-def prune_filters(model: nn.Module, model_name: str):
+def prune_filters(model: nn.Module, model_name: str, amount: float):
     for name, module in model.named_modules():
         if isinstance(module, nn.Conv2d):
-            prune.ln_structured(module, 'weight', 0.1, float('inf'), 1)
+            prune.ln_structured(module, 'weight', amount, float('inf'), 1)
             
             if module.bias != None:
-                bias_mask = torch.ones_like(module.bias, device=model.bias.device)
-                filter_indices = get_filter_indices(module.weight)
+                bias_mask = torch.ones_like(module.bias, device=next(model.parameters()).device)
+                filter_indices = get_filter_indices(module)
                 bias_mask[filter_indices] = 0
                 prune.custom_from_mask(module, 'bias', bias_mask)
                 
@@ -273,6 +273,16 @@ def get_num_pruned_parameters(params: list[tuple[nn.Module, Literal]]):
     for param, _ in params:
         num_pruned += (param.weight.view(-1) == 0).sum()
     return num_pruned
+
+def get_num_masked_parameters(model):
+    num_masked = 0
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Conv2d):
+            print(name)
+            num_masked += ((module.weight_mask == 0).view(-1).nonzero().numel())  
+            if module.bias != None:
+                num_masked += (module.bias_mask == 0).view(-1).nonzero().numel()     
+    return num_masked   
     
 def get_kernel_indices(module: nn.Module, pruned: Optional[bool] = True):
     check = (lambda x: x==0) if pruned else (lambda x: x!=0) 
