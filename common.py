@@ -68,15 +68,21 @@ def cifar100():
 def prune_filters(model: nn.Module, model_name: str, amount: float):
     for name, module in model.named_modules():
         if isinstance(module, nn.Conv2d):
-            prune.ln_structured(module, 'weight', amount, float('inf'), 1)
+            prune.ln_structured(module, 'weight', amount, float('inf'), 0)
             
             if module.bias != None:
                 bias_mask = torch.ones_like(module.bias, device=next(model.parameters()).device)
                 filter_indices = get_filter_indices(module)
                 bias_mask[filter_indices] = 0
                 prune.custom_from_mask(module, 'bias', bias_mask)
-                
-    
+
+def restore_unpruned_weights(model: nn.Module):
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Conv2d):
+            module.weight.data[module.filter_indices, :, :, :] = module.old_weight.data[module.filter_indices, :, :, :]
+            if module.bias != None:
+                module.bias.data[module.filter_indices] = module.old_bias.data[module.filter_indices]                    
+
 def get_data_loaders(dataset_name: str):
     if dataset_name == 'cifar100':
         return cifar100()
@@ -349,6 +355,76 @@ def get_dataset(dataset_name: Literal['cifar10', 'cifar100']):
     
 def load_model(dataset_name: Literal, architecture: Literal, pretrained: Optional[bool] = True):
     return getattr(pytorch_cifar_models, f'{dataset_name}_{architecture}')(pretrained=pretrained)
+
+def load_checkpoint(model: str, path: str):
+    model = getattr(pytorch_cifar_models, model)(pretrained=True)
+    state = torch.load(path, map_location=torch.device('cpu'))
+    
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Conv2d):
+            prune.identity(module, 'weight')
+            if module.bias != None:
+                prune.identity(module, 'bias')
+    model.load_state_dict(state)
+    
+    return model
+
+def initialize_checkpoint(model: nn.Module, starting_state: str):
+    if starting_state == 'zero':
+        for name, module in model.named_modules():
+            if isinstance(module, nn.Conv2d):
+                # Store the filter indices and old values
+                module.filter_indices = get_filter_indices(module, False)
+                module.old_weight = module.weight_orig.data
+                
+                # Remove the mask
+                prune.remove(module, 'weight')
+                
+                # Repeat for bias
+                if module.bias != None:
+                    module.old_bias = module.bias_orig.data
+                    prune.remove(module, 'bias')
+    elif starting_state == 'orig':
+        for name, module in model.named_modules():
+            if isinstance(module, nn.Conv2d):
+                # Store the filter indices and old values
+                module.filter_indices = get_filter_indices(module, False)
+                module.old_weight = module.weight_orig.data
+                
+                # Remove the mask
+                prune.remove(module, 'weight')
+                
+                # Return the pruned weights to their original values
+                module.weight.data = module.old_weight.data
+                
+                # Repeat for bias
+                if module.bias != None:
+                    module.old_bias = module.bias_orig.data
+                    prune.remove(module, 'bias')
+                    module.bias.data = module.old_bias.data
+    elif starting_state == 'rand':
+        for name, module in model.named_modules():
+            if isinstance(module, nn.Conv2d):
+                # Store the filter indices and old values
+                module.filter_indices = get_filter_indices(module, False)
+                module.old_weight = module.weight_orig.data
+                
+                # Remove the mask
+                prune.remove(module, 'weight')
+
+                # Repeat for bias
+                if module.bias != None:
+                    module.old_bias = module.bias_orig.data
+                    prune.remove(module, 'bias')
+                    module.bias.data = module.old_bias.data
+                    
+                # Reset parameters and restore the un-pruned weights
+                module.reset_parameters()
+                module.weight.data[module.filter_indices, :, :, :] = module.old_weight.data[module.filter_indices, :, :, :]
+                if module.bias != None:
+                    module.bias.data[module.filter_indices] = module.old_bias.data[module.filter_indices]
+    else:
+        raise NotImplementedError
 
 def validate(data: data.DataLoader, model: nn.Module):
     # Set up the quality metrics

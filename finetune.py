@@ -27,8 +27,6 @@ def prepare_for_training(device, model):
     model.accuracy_top1 = Accuracy(task='multiclass', num_classes=100)
     model.accuracy_top5 = Accuracy(task='multiclass', num_classes=100, top_k=5)
     
-    model.accuracy_top1.reset()
-    
     # Get the data loaders
     train_loader, val_loader = cifar100()
     
@@ -138,7 +136,7 @@ def main(opt):
     # The initial evalutation
     evaluate(model, criterion, val_loader, device, 0)
     
-    # Begine Fine-tuning
+    # Begin Fine-tuning
     global_step = 0
     for pruning_step in range(13):
         # Prune the model once
