@@ -43,11 +43,12 @@ def prepare_for_training(device, model, starting_state):
         
     # Initialize optimizer
     # TODO: Make parameters user-defined
-    optimizer = optim.SGD([v for n, v in model.named_parameters()], 0.1, 0.9, 0, 5e-4, True)
+    optimizer = optim.SGD([v for n, v in model.named_parameters()], 0.001, 0.9, 0, 5e-4, True)
     
     # Intialize the scheduler
     # TODO: Make T_max a user-defined
-    scheduler = CosineAnnealingLR(optimizer=optimizer, T_max=300, eta_min=0)
+    # scheduler = CosineAnnealingLR(optimizer=optimizer, T_max=300, eta_min=0)
+    scheduler = None
     
     # Return 
     return model, criterion, optimizer, scheduler, train_loader, val_loader
@@ -76,7 +77,7 @@ def train(model, criterion, optimizer, scheduler, train_loader, device, epoch):
         
         restore_unpruned_weights(model)
         
-        scheduler.step()
+        # scheduler.step()
         
     # Record results
     running_loss = running_loss / len(train_loader)
