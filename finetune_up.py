@@ -11,6 +11,7 @@ from torchmetrics.classification import Accuracy
 
 import pytorch_cifar_models
 from common import *
+from nn_utils import *
 
 def parse_opt():
     parser = argparse.ArgumentParser()
@@ -25,6 +26,7 @@ def prepare_for_training(device, model, starting_state):
     # Load the model
     path = './runs/Oct09_04-08-33_poison.ics.uci.educifar100_vgg11_bn/cifar100_vgg11_bn_3_loss1.654237985610962_acco0.6675999760627747_accf0.8598999977111816.pt'
     model = load_checkpoint(model, path)
+    # convert_model(model)
     
     # Add the metrics to the model
     model.accuracy_top1 = Accuracy(task='multiclass', num_classes=100)
@@ -43,7 +45,8 @@ def prepare_for_training(device, model, starting_state):
         
     # Initialize optimizer
     # TODO: Make parameters user-defined
-    optimizer = optim.SGD([v for n, v in model.named_parameters()], 0.001, 0.9, 0, 5e-4, True)
+    optimizer = None
+    # optimizer = optim.SGD([v for n, v in model.named_parameters()], 1, 0.9, 0, 5e-4, True)
     
     # Intialize the scheduler
     # TODO: Make T_max a user-defined
@@ -73,9 +76,12 @@ def train(model, criterion, optimizer, scheduler, train_loader, device, epoch):
         
         loss.backward()
         running_loss += loss
+        
+        # preserve_unpruned_weights(model)
+        
         optimizer.step()
         
-        restore_unpruned_weights(model)
+        # restore_unpruned_weights(model)
         
         # scheduler.step()
         
@@ -143,6 +149,16 @@ def main(opt):
     # Model starting state
     initialize_checkpoint(model, opt.starting_state)
     
+    # Convert Conv2d layers to FrozenConv2d
+    convert_model(model)
+    
+    # Move to cuda if available
+    if torch.cuda.is_available():
+        model.to(device=device)
+        
+    # Reinitialize optimizer
+    optimizer = optim.SGD([v for n, v in model.features.named_parameters()], 0.001, 0.9, 0, 5e-4, True)
+    
     # Initialize the best model metrics
     best_dict = None
     best_loss = 10_000
@@ -160,6 +176,12 @@ def main(opt):
     writer.add_scalar('Validation/Loss', loss_eval, global_step)
     writer.add_scalar('Validation/Accuracy (Top-1)', acc_1, global_step)
     writer.add_scalar('Validation/Accuracy (Top-5)', acc_5, global_step)
+    writer.add_scalar('Debug/fixed_weight_1', model.features[11].weight_list[0].data[0,0,0,0], global_step)
+    writer.add_scalar('Debug/fixed_weight_2', model.features[11].weight_list[0].data[0,0,0,1], global_step)
+    writer.add_scalar('Debug/fixed_weight_3', model.features[11].weight_list[0].data[0,0,0,2], global_step)
+    writer.add_scalar('Debug/trainable_weight_1', model.features[11].weight_list[1].data[0,0,0,0], global_step)
+    writer.add_scalar('Debug/trainable_weight_2', model.features[11].weight_list[1].data[0,0,0,1], global_step)
+    writer.add_scalar('Debug/trainable_weight_3', model.features[11].weight_list[1].data[0,0,0,2], global_step)
     
     # Begin Training
     for epoch in range(350):
@@ -181,6 +203,12 @@ def main(opt):
         writer.add_scalar('Validation/Loss', loss_eval, global_step)
         writer.add_scalar('Validation/Accuracy (Top-1)', acc_1, global_step)
         writer.add_scalar('Validation/Accuracy (Top-5)', acc_5, global_step)
+        writer.add_scalar('Debug/fixed_weight_1', model.features[11].weight_list[0].data[0,0,0,0], global_step)
+        writer.add_scalar('Debug/fixed_weight_2', model.features[11].weight_list[0].data[0,0,0,1], global_step)
+        writer.add_scalar('Debug/fixed_weight_3', model.features[11].weight_list[0].data[0,0,0,2], global_step)
+        writer.add_scalar('Debug/trainable_weight_1', model.features[11].weight_list[1].data[0,0,0,0], global_step)
+        writer.add_scalar('Debug/trainable_weight_2', model.features[11].weight_list[1].data[0,0,0,1], global_step)
+        writer.add_scalar('Debug/trainable_weight_3', model.features[11].weight_list[1].data[0,0,0,2], global_step)
         
         # Increment global step
         global_step += 1

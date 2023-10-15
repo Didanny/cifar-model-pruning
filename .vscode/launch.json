@@ -61,6 +61,30 @@
                 "--model", 
                 "cifar100_vgg11_bn",
             ]
+        },
+        {
+            "name": "finetune_up",
+            "type": "python",
+            "request": "launch",
+            "program": "finetune_up.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--model", 
+                "cifar100_vgg11_bn",
+                "--starting-state",
+                "orig",
+                "--checkpoint",
+                "0"
+            ]
+        },
+        {
+            "name": "cifar10",
+            "type": "python",
+            "request": "launch",
+            "program": "cifar10_test.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
         }
     ]
 }

@@ -83,6 +83,13 @@ def restore_unpruned_weights(model: nn.Module):
             if module.bias != None:
                 module.bias.data[module.filter_indices] = module.old_bias.data[module.filter_indices]                    
 
+def preserve_unpruned_weights(model: nn.Module):
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Conv2d):
+            module.weight.grad[module.filter_indices, :, :, :] = 0
+            if module.bias != None:
+                module.bias.grad[module.filter_indices] = 0
+
 def get_data_loaders(dataset_name: str):
     if dataset_name == 'cifar100':
         return cifar100()
@@ -373,7 +380,10 @@ def initialize_checkpoint(model: nn.Module, starting_state: str):
     if starting_state == 'zero':
         for name, module in model.named_modules():
             if isinstance(module, nn.Conv2d):
+                # TODO: Clean this up, for all if-elif blocks
                 # Store the filter indices and old values
+                module.trainable_indices = get_filter_indices(module, pruned=True)
+                module.fixed_indices = get_filter_indices(module, pruned=False)
                 module.filter_indices = get_filter_indices(module, False)
                 module.old_weight = module.weight_orig.data
                 
@@ -388,6 +398,8 @@ def initialize_checkpoint(model: nn.Module, starting_state: str):
         for name, module in model.named_modules():
             if isinstance(module, nn.Conv2d):
                 # Store the filter indices and old values
+                module.trainable_indices = get_filter_indices(module, pruned=True)
+                module.fixed_indices = get_filter_indices(module, pruned=False)
                 module.filter_indices = get_filter_indices(module, False)
                 module.old_weight = module.weight_orig.data
                 
@@ -406,6 +418,8 @@ def initialize_checkpoint(model: nn.Module, starting_state: str):
         for name, module in model.named_modules():
             if isinstance(module, nn.Conv2d):
                 # Store the filter indices and old values
+                module.trainable_indices = get_filter_indices(module, pruned=True)
+                module.fixed_indices = get_filter_indices(module, pruned=False)
                 module.filter_indices = get_filter_indices(module, False)
                 module.old_weight = module.weight_orig.data
                 
