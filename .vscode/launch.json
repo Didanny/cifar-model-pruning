@@ -85,6 +85,24 @@
             "program": "cifar10_test.py",
             "console": "integratedTerminal",
             "justMyCode": true,
-        }
+        },
+        {
+            "name": "finetune_yolo",
+            "type": "python",
+            "request": "launch",
+            "program": "finetune_yolo.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--data", 
+                "coco128.yaml",
+                "--epochs",
+                "300",
+                "--weights",
+                "yolov5s.pt",
+                "--batch",
+                "-1"
+            ]
+        },
     ]
 }
