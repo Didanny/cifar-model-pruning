@@ -65,7 +65,7 @@ def cifar100():
         dataset_builder=CIFAR100,
     )
     
-def prune_filters(model: nn.Module, model_name: str, amount: float):
+def prune_filters(model: nn.Module, model_name: Literal, amount: float):
     for name, module in model.named_modules():
         if isinstance(module, nn.Conv2d):
             prune.ln_structured(module, 'weight', amount, float('inf'), 0)
@@ -75,6 +75,27 @@ def prune_filters(model: nn.Module, model_name: str, amount: float):
                 filter_indices = get_filter_indices(module)
                 bias_mask[filter_indices] = 0
                 prune.custom_from_mask(module, 'bias', bias_mask)
+                
+def prune_structured(module: nn.Module, name: Literal, amount: float):
+    # Get the number of filters to be pruned
+    k = round(amount * module.out_channels)
+    
+    # Get the inf norms of the filters
+    norms = torch.norm(module.weight.data, float('inf'), (1,2,3))
+    
+    # Get the indices of the bottom-k filters
+    smallest_filters = torch.topk(norms, k, largest=False).indices 
+    
+    # Create and apply the mask
+    mask = torch.ones_like(module.weight.data)
+    mask[smallest_filters,:,:,:] *= 0
+    prune.custom_from_mask(module, name, mask)
+    
+    # Apply the same to the bias if it exists
+    if module.bias != None:
+        bias_mask = torch.ones_like(module.bias.data)
+        bias_mask[smallest_filters] = 0
+        prune.custom_from_mask(module, 'bias', bias_mask)
 
 def restore_unpruned_weights(model: nn.Module):
     for name, module in model.named_modules():

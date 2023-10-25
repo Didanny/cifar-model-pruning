@@ -18,7 +18,7 @@ import yaml
 from torch.optim import lr_scheduler
 import torch.nn.utils.prune as prune
 from tqdm import tqdm
-from common import get_filter_indices
+from common import get_filter_indices, prune_filters, prune_structured
 
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.classification import Accuracy
@@ -133,8 +133,8 @@ def log(writer: SummaryWriter, results, global_step: int, val_only=False):
         writer.add_scalar('Tra/Objectness loss', obj_loss_t, global_step)
         writer.add_scalar('Tra/Classification loss', cls_loss_t, global_step)
     
-def prune_filters(model, weights, amount=0.1):
-    model.cpu()
+def prune_filters_(model, weights, amount=0.1):
+    # model.cpu()
     for name, module in model.named_modules():
         # Create list of all module names
         
@@ -147,12 +147,17 @@ def prune_filters(model, weights, amount=0.1):
                     if isinstance(m, nn.Conv2d):
                         # parameters_to_prune.append((m, 'weight', f'{name}.{n}'))
                         # module_names.append(f'{name}.{n}')
-                        prune.ln_structured(m, 'weight', amount, float('inf'), 0)
-                        if m.bias != None:
-                            bias_mask = torch.ones_like(m.bias, device=next(model.parameters()).device)
-                            filter_indices = get_filter_indices(m)
-                            bias_mask[filter_indices] = 0
-                            prune.custom_from_mask(m, 'bias', bias_mask)
+                        # weight_mask = torch.ones_like(m.weight, device=next(model.parameters()).device)
+                        # weight_mask[0,:,:,:] = 0
+                        # prune.custom_from_mask(m, 'weight', weight_mask)
+                        # breakpoint()
+                        prune_structured(m, 'weight', amount)
+                        # prune.ln_structured(m, 'weight', amount, float('inf'), 0)
+                        # if m.bias != None:
+                        #     bias_mask = torch.ones_like(m.bias, device=next(model.parameters()).device)
+                        #     filter_indices = get_filter_indices(m)
+                        #     bias_mask[filter_indices] = 0
+                        #     prune.custom_from_mask(m, 'bias', bias_mask)
             # ----------------------------------------------------------------------------------
             
             # The back-bone conv layers preceding C3 blocks-------------------------------------
@@ -162,12 +167,13 @@ def prune_filters(model, weights, amount=0.1):
                     if isinstance(m, nn.Conv2d):
                         # parameters_to_prune.append((m, 'weight', f'{name}.{n}'))
                         # module_names.append(f'{name}.{n}')
-                        prune.ln_structured(m, 'weight', amount, float('inf'), 0)
-                        if m.bias != None:
-                            bias_mask = torch.ones_like(m.bias, device=next(model.parameters()).device)
-                            filter_indices = get_filter_indices(m)
-                            bias_mask[filter_indices] = 0
-                            prune.custom_from_mask(m, 'bias', bias_mask)
+                        prune_structured(m, 'weight', amount)
+                        # prune.ln_structured(m, 'weight', amount, float('inf'), 0)
+                        # if m.bias != None:
+                        #     bias_mask = torch.ones_like(m.bias, device=next(model.parameters()).device)
+                        #     filter_indices = get_filter_indices(m)
+                        #     bias_mask[filter_indices] = 0
+                        #     prune.custom_from_mask(m, 'bias', bias_mask)
             # ----------------------------------------------------------------------------------
             
             # The first conv layer in the back-bone bottlenecks---------------------------------
@@ -177,12 +183,13 @@ def prune_filters(model, weights, amount=0.1):
                     if re.search('m\.[\d]*\.cv1.conv$', n) != None:
                         # parameters_to_prune.append((m, 'weight', f'{name}.{n}'))
                         # module_names.append(f'{name}.{n}')
-                        prune.ln_structured(m, 'weight', amount, float('inf'), 0)
-                        if m.bias != None:
-                            bias_mask = torch.ones_like(m.bias, device=next(model.parameters()).device)
-                            filter_indices = get_filter_indices(m)
-                            bias_mask[filter_indices] = 0
-                            prune.custom_from_mask(m, 'bias', bias_mask)
+                        prune_structured(m, 'weight', amount)
+                        # prune.ln_structured(m, 'weight', amount, float('inf'), 0)
+                        # if m.bias != None:
+                        #     bias_mask = torch.ones_like(m.bias, device=next(model.parameters()).device)
+                        #     filter_indices = get_filter_indices(m)
+                        #     bias_mask[filter_indices] = 0
+                        #     prune.custom_from_mask(m, 'bias', bias_mask)
             # ----------------------------------------------------------------------------------
             
             # The detour conv layer in the back-bone C3 blocks-----------------------------------
@@ -192,12 +199,13 @@ def prune_filters(model, weights, amount=0.1):
                     if n == 'cv2.conv':
                         # parameters_to_prune.append((m, 'weight', f'{name}.{n}'))
                         # module_names.append(f'{name}.{n}')
-                        prune.ln_structured(m, 'weight', amount, float('inf'), 0)
-                        if m.bias != None:
-                            bias_mask = torch.ones_like(m.bias, device=next(model.parameters()).device)
-                            filter_indices = get_filter_indices(m)
-                            bias_mask[filter_indices] = 0
-                            prune.custom_from_mask(m, 'bias', bias_mask)
+                        prune_structured(m, 'weight', amount)
+                        # prune.ln_structured(m, 'weight', amount, float('inf'), 0)
+                        # if m.bias != None:
+                        #     bias_mask = torch.ones_like(m.bias, device=next(model.parameters()).device)
+                        #     filter_indices = get_filter_indices(m)
+                        #     bias_mask[filter_indices] = 0
+                        #     prune.custom_from_mask(m, 'bias', bias_mask)
             # ----------------------------------------------------------------------------------
             
             # Last conv layer in the 1st back-bone C3 blocks------------------------------------
@@ -207,12 +215,13 @@ def prune_filters(model, weights, amount=0.1):
                     if n == 'cv3.conv':
                         # parameters_to_prune.append((m, 'weight', f'{name}.{n}'))
                         # module_names.append(f'{name}.{n}')
-                        prune.ln_structured(m, 'weight', amount, float('inf'), 0)
-                        if m.bias != None:
-                            bias_mask = torch.ones_like(m.bias, device=next(model.parameters()).device)
-                            filter_indices = get_filter_indices(m)
-                            bias_mask[filter_indices] = 0
-                            prune.custom_from_mask(m, 'bias', bias_mask)
+                        prune_structured(m, 'weight', amount)
+                        # prune.ln_structured(m, 'weight', amount, float('inf'), 0)
+                        # if m.bias != None:
+                        #     bias_mask = torch.ones_like(m.bias, device=next(model.parameters()).device)
+                        #     filter_indices = get_filter_indices(m)
+                        #     bias_mask[filter_indices] = 0
+                        #     prune.custom_from_mask(m, 'bias', bias_mask)
             # ----------------------------------------------------------------------------------
             
             # Last conv layer in the 2nd and 3rd back-bone C3 block-----------------------------
@@ -222,12 +231,13 @@ def prune_filters(model, weights, amount=0.1):
                     if n == 'cv3.conv':
                         # parameters_to_prune.append((m, 'weight', f'{name}.{n}'))
                         # module_names.append(f'{name}.{n}')
-                        prune.ln_structured(m, 'weight', amount, float('inf'), 0)
-                        if m.bias != None:
-                            bias_mask = torch.ones_like(m.bias, device=next(model.parameters()).device)
-                            filter_indices = get_filter_indices(m)
-                            bias_mask[filter_indices] = 0
-                            prune.custom_from_mask(m, 'bias', bias_mask)
+                        prune_structured(m, 'weight', amount)
+                        # prune.ln_structured(m, 'weight', amount, float('inf'), 0)
+                        # if m.bias != None:
+                        #     bias_mask = torch.ones_like(m.bias, device=next(model.parameters()).device)
+                        #     filter_indices = get_filter_indices(m)
+                        #     bias_mask[filter_indices] = 0
+                        #     prune.custom_from_mask(m, 'bias', bias_mask)
             # ----------------------------------------------------------------------------------
             
             # The last conv layer in the 4th back-bone C3 block---------------------------------
@@ -237,12 +247,13 @@ def prune_filters(model, weights, amount=0.1):
                     if n == 'cv3.conv':
                         # parameters_to_prune.append((m, 'weight', f'{name}.{n}'))
                         # module_names.append(f'{name}.{n}')
-                        prune.ln_structured(m, 'weight', amount, float('inf'), 0)
-                        if m.bias != None:
-                            bias_mask = torch.ones_like(m.bias, device=next(model.parameters()).device)
-                            filter_indices = get_filter_indices(m)
-                            bias_mask[filter_indices] = 0
-                            prune.custom_from_mask(m, 'bias', bias_mask)
+                        prune_structured(m, 'weight', amount)
+                        # prune.ln_structured(m, 'weight', amount, float('inf'), 0)
+                        # if m.bias != None:
+                        #     bias_mask = torch.ones_like(m.bias, device=next(model.parameters()).device)
+                        #     filter_indices = get_filter_indices(m)
+                        #     bias_mask[filter_indices] = 0
+                        #     prune.custom_from_mask(m, 'bias', bias_mask)
             # ----------------------------------------------------------------------------------
             
             # TODO: Debug the issue with the maxpooling channel weights
@@ -263,12 +274,13 @@ def prune_filters(model, weights, amount=0.1):
                     if n == 'conv':
                         # parameters_to_prune.append((m, 'weight', f'{name}.{n}'))
                         # module_names.append(f'{name}.{n}')
-                        prune.ln_structured(m, 'weight', amount, float('inf'), 0)
-                        if m.bias != None:
-                            bias_mask = torch.ones_like(m.bias, device=next(model.parameters()).device)
-                            filter_indices = get_filter_indices(m)
-                            bias_mask[filter_indices] = 0
-                            prune.custom_from_mask(m, 'bias', bias_mask)
+                        prune_structured(m, 'weight', amount)
+                        # prune.ln_structured(m, 'weight', amount, float('inf'), 0)
+                        # if m.bias != None:
+                        #     bias_mask = torch.ones_like(m.bias, device=next(model.parameters()).device)
+                        #     filter_indices = get_filter_indices(m)
+                        #     bias_mask[filter_indices] = 0
+                        #     prune.custom_from_mask(m, 'bias', bias_mask)
             # ----------------------------------------------------------------------------------
             
             # The first conv layer in the neck--------------------------------------------------
@@ -278,12 +290,13 @@ def prune_filters(model, weights, amount=0.1):
                     if n == 'conv':
                         # parameters_to_prune.append((m, 'weight', f'{name}.{n}'))
                         # module_names.append(f'{name}.{n}')
-                        prune.ln_structured(m, 'weight', amount, float('inf'), 0)
-                        if m.bias != None:
-                            bias_mask = torch.ones_like(m.bias, device=next(model.parameters()).device)
-                            filter_indices = get_filter_indices(m)
-                            bias_mask[filter_indices] = 0
-                            prune.custom_from_mask(m, 'bias', bias_mask)
+                        prune_structured(m, 'weight', amount)
+                        # prune.ln_structured(m, 'weight', amount, float('inf'), 0)
+                        # if m.bias != None:
+                        #     bias_mask = torch.ones_like(m.bias, device=next(model.parameters()).device)
+                        #     filter_indices = get_filter_indices(m)
+                        #     bias_mask[filter_indices] = 0
+                        #     prune.custom_from_mask(m, 'bias', bias_mask)
             # ----------------------------------------------------------------------------------
             
             # The 2nd conv layer in the neck----------------------------------------------------
@@ -293,12 +306,13 @@ def prune_filters(model, weights, amount=0.1):
                     if n == 'conv':
                         # parameters_to_prune.append((m, 'weight', f'{name}.{n}'))
                         # module_names.append(f'{name}.{n}')
-                        prune.ln_structured(m, 'weight', amount, float('inf'), 0)
-                        if m.bias != None:
-                            bias_mask = torch.ones_like(m.bias, device=next(model.parameters()).device)
-                            filter_indices = get_filter_indices(m)
-                            bias_mask[filter_indices] = 0
-                            prune.custom_from_mask(m, 'bias', bias_mask)
+                        prune_structured(m, 'weight', amount)
+                        # prune.ln_structured(m, 'weight', amount, float('inf'), 0)
+                        # if m.bias != None:
+                        #     bias_mask = torch.ones_like(m.bias, device=next(model.parameters()).device)
+                        #     filter_indices = get_filter_indices(m)
+                        #     bias_mask[filter_indices] = 0
+                        #     prune.custom_from_mask(m, 'bias', bias_mask)
             # ----------------------------------------------------------------------------------
             
             # The 3rd and 4th conv layers in the neck-------------------------------------------
@@ -308,12 +322,13 @@ def prune_filters(model, weights, amount=0.1):
                     if n == 'conv':
                         # parameters_to_prune.append((m, 'weight', f'{name}.{n}'))
                         # module_names.append(f'{name}.{n}')
-                        prune.ln_structured(m, 'weight', amount, float('inf'), 0)
-                        if m.bias != None:
-                            bias_mask = torch.ones_like(m.bias, device=next(model.parameters()).device)
-                            filter_indices = get_filter_indices(m)
-                            bias_mask[filter_indices] = 0
-                            prune.custom_from_mask(m, 'bias', bias_mask)
+                        prune_structured(m, 'weight', amount)
+                        # prune.ln_structured(m, 'weight', amount, float('inf'), 0)
+                        # if m.bias != None:
+                        #     bias_mask = torch.ones_like(m.bias, device=next(model.parameters()).device)
+                        #     filter_indices = get_filter_indices(m)
+                        #     bias_mask[filter_indices] = 0
+                        #     prune.custom_from_mask(m, 'bias', bias_mask)
             # ----------------------------------------------------------------------------------
             
             # The external conv layers in the 1st C3 block in the neck--------------------------
@@ -323,12 +338,13 @@ def prune_filters(model, weights, amount=0.1):
                     if n == 'cv1.conv' or n == 'cv2.conv' or n == 'cv3.conv':
                         # parameters_to_prune.append((m, 'weight', f'{name}.{n}'))
                         # module_names.append(f'{name}.{n}')
-                        prune.ln_structured(m, 'weight', amount, float('inf'), 0)
-                        if m.bias != None:
-                            bias_mask = torch.ones_like(m.bias, device=next(model.parameters()).device)
-                            filter_indices = get_filter_indices(m)
-                            bias_mask[filter_indices] = 0
-                            prune.custom_from_mask(m, 'bias', bias_mask)
+                        prune_structured(m, 'weight', amount)
+                        # prune.ln_structured(m, 'weight', amount, float('inf'), 0)
+                        # if m.bias != None:
+                        #     bias_mask = torch.ones_like(m.bias, device=next(model.parameters()).device)
+                        #     filter_indices = get_filter_indices(m)
+                        #     bias_mask[filter_indices] = 0
+                        #     prune.custom_from_mask(m, 'bias', bias_mask)
             # ----------------------------------------------------------------------------------
             
             # TODO: See why the HEAD pruning is causing non-deterministic quality metrics
@@ -373,12 +389,13 @@ def prune_filters(model, weights, amount=0.1):
                             if n_.endswith('conv'):
                                 # parameters_to_prune.append((m_, 'weight', f'{name}.{n}.{n_}'))
                                 # module_names.append(f'{name}.{n}.{n_}')
-                                prune.ln_structured(m_, 'weight', amount, float('inf'), 0)
-                                if m_.bias != None:
-                                    bias_mask = torch.ones_like(m_.bias, device=next(model.parameters()).device)
-                                    filter_indices = get_filter_indices(m_)
-                                    bias_mask[filter_indices] = 0
-                                    prune.custom_from_mask(m_, 'bias', bias_mask)
+                                prune_structured(m_, 'weight', amount)
+                                # prune.ln_structured(m_, 'weight', amount, float('inf'), 0)
+                                # if m_.bias != None:
+                                #     bias_mask = torch.ones_like(m_.bias, device=next(model.parameters()).device)
+                                #     filter_indices = get_filter_indices(m_)
+                                #     bias_mask[filter_indices] = 0
+                                #     prune.custom_from_mask(m_, 'bias', bias_mask)
             # ----------------------------------------------------------------------------------
             
             # The bottleneck conv layers in the 2nd C3 block in the neck-------------------------
@@ -390,12 +407,13 @@ def prune_filters(model, weights, amount=0.1):
                             if n_.endswith('conv'):
                                 # parameters_to_prune.append((m_, 'weight', f'{name}.{n}.{n_}'))
                                 # module_names.append(f'{name}.{n}.{n_}')
-                                prune.ln_structured(m_, 'weight', amount, float('inf'), 0)
-                                if m_.bias != None:
-                                    bias_mask = torch.ones_like(m_.bias, device=next(model.parameters()).device)
-                                    filter_indices = get_filter_indices(m_)
-                                    bias_mask[filter_indices] = 0
-                                    prune.custom_from_mask(m_, 'bias', bias_mask)
+                                prune_structured(m_, 'weight', amount)
+                                # prune.ln_structured(m_, 'weight', amount, float('inf'), 0)
+                                # if m_.bias != None:
+                                #     bias_mask = torch.ones_like(m_.bias, device=next(model.parameters()).device)
+                                #     filter_indices = get_filter_indices(m_)
+                                #     bias_mask[filter_indices] = 0
+                                #     prune.custom_from_mask(m_, 'bias', bias_mask)
             # ----------------------------------------------------------------------------------
             
             # The bottleneck conv layers in the 3rd C3 block in the neck-------------------------
@@ -407,12 +425,13 @@ def prune_filters(model, weights, amount=0.1):
                             if n_.endswith('conv'):
                                 # parameters_to_prune.append((m_, 'weight', f'{name}.{n}.{n_}'))
                                 # module_names.append(f'{name}.{n}.{n_}')
-                                prune.ln_structured(m_, 'weight', amount, float('inf'), 0)
-                                if m_.bias != None:
-                                    bias_mask = torch.ones_like(m_.bias, device=next(model.parameters()).device)
-                                    filter_indices = get_filter_indices(m_)
-                                    bias_mask[filter_indices] = 0
-                                    prune.custom_from_mask(m_, 'bias', bias_mask)
+                                prune_structured(m_, 'weight', amount)
+                                # prune.ln_structured(m_, 'weight', amount, float('inf'), 0)
+                                # if m_.bias != None:
+                                #     bias_mask = torch.ones_like(m_.bias, device=next(model.parameters()).device)
+                                #     filter_indices = get_filter_indices(m_)
+                                #     bias_mask[filter_indices] = 0
+                                #     prune.custom_from_mask(m_, 'bias', bias_mask)
             # ----------------------------------------------------------------------------------
             
             # The bottleneck conv layers in the 4th C3 block in the neck-------------------------
@@ -424,35 +443,36 @@ def prune_filters(model, weights, amount=0.1):
                             if n_.endswith('conv'):
                                 # parameters_to_prune.append((m_, 'weight', f'{name}.{n}.{n_}'))
                                 # module_names.append(f'{name}.{n}.{n_}')
-                                prune.ln_structured(m_, 'weight', amount, float('inf'), 0)
-                                if m_.bias != None:
-                                    bias_mask = torch.ones_like(m_.bias, device=next(model.parameters()).device)
-                                    filter_indices = get_filter_indices(m_)
-                                    bias_mask[filter_indices] = 0
-                                    prune.custom_from_mask(m_, 'bias', bias_mask)
+                                prune_structured(m_, 'weight', amount)
+                                # prune.ln_structured(m_, 'weight', amount, float('inf'), 0)
+                                # if m_.bias != None:
+                                #     bias_mask = torch.ones_like(m_.bias, device=next(model.parameters()).device)
+                                #     filter_indices = get_filter_indices(m_)
+                                #     bias_mask[filter_indices] = 0
+                                #     prune.custom_from_mask(m_, 'bias', bias_mask)
             # ----------------------------------------------------------------------------------
-    model.cuda()
+    # model.cuda()
 
 def main(opt):
     # Print args
     print_args(vars(opt))
     
     # Initialize Tensorboard writer
-    writer = SummaryWriter(comment=opt.weights)
+    writer = SummaryWriter(comment=f'_{opt.weights}')
     opt.save_dir = writer.log_dir
     
     # Prepare options
     opt.data, opt.cfg, opt.hyp, opt.weights, opt.project = \
         check_file(opt.data), check_yaml(opt.cfg), check_yaml(opt.hyp), str(opt.weights), str(opt.project)  # checks
     assert len(opt.cfg) or len(opt.weights), 'either --cfg or --weights must be specified'
-    opt.save_dir = str(increment_path(Path(opt.project) / opt.name, exist_ok=opt.exist_ok))
+    # opt.save_dir = str(increment_path(Path(opt.project) / opt.name, exist_ok=opt.exist_ok))
     
     # Get current device
     device = select_device(opt.device, batch_size=opt.batch_size)
     
     # Begin Training
     save_dir, epochs, batch_size, weights, single_cls, data, cfg, resume, noval, nosave, workers, freeze = \
-        Path(opt.save_dir), opt.epochs, opt.batch_size, opt.weights, opt.single_cls, opt.data, opt.cfg, \
+        Path(opt.save_dir), 30, opt.batch_size, opt.weights, opt.single_cls, opt.data, opt.cfg, \
         opt.resume, opt.noval, opt.nosave, opt.workers, opt.freeze
     
     # Directories
@@ -512,7 +532,7 @@ def main(opt):
     accumulate = max(round(nbs / batch_size), 1)  # accumulate loss before optimizing
     hyp['weight_decay'] *= batch_size * accumulate / nbs  # scale weight_decay
     # TODO: Make learning rate user-defined
-    hyp['lr0'] = 0.001
+    hyp['lr0'] = 0.0002
     optimizer = smart_optimizer(model, opt.optimizer, hyp['lr0'], hyp['momentum'], hyp['weight_decay'])
     
     # EMA
@@ -605,7 +625,7 @@ def main(opt):
         last, best = w / f'last_{pruning_step}.pt', w / f'best_{pruning_step}.pt'
         
         # Prune model iteratively
-        prune_filters(model, opt.weights, 0.1)
+        prune_filters_(model, opt.weights, 0.1 + (0.1 * pruning_step))
         
         # Initial evalutation
         results, maps, _ = validate.run(data_dict,
