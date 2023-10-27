@@ -99,7 +99,7 @@
                 "--epochs",
                 "300",
                 "--weights",
-                "yolov5n.pt",
+                "yolov5s.pt",
                 "--batch",
                 "-1"
             ]

@@ -6,6 +6,7 @@ import subprocess
 import sys
 import re
 import time
+import json
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
@@ -18,7 +19,7 @@ import yaml
 from torch.optim import lr_scheduler
 import torch.nn.utils.prune as prune
 from tqdm import tqdm
-from common import get_filter_indices, prune_filters, prune_structured
+from common import get_filter_indices, prune_filters, prune_structured, get_prunable_parameters, get_next
 
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.classification import Accuracy
@@ -472,7 +473,7 @@ def main(opt):
     
     # Begin Training
     save_dir, epochs, batch_size, weights, single_cls, data, cfg, resume, noval, nosave, workers, freeze = \
-        Path(opt.save_dir), 30, opt.batch_size, opt.weights, opt.single_cls, opt.data, opt.cfg, \
+        Path(opt.save_dir), opt.epochs, opt.batch_size, opt.weights, opt.single_cls, opt.data, opt.cfg, \
         opt.resume, opt.noval, opt.nosave, opt.workers, opt.freeze
     
     # Directories
@@ -619,13 +620,30 @@ def main(opt):
     log(writer, results, global_step, val_only=True)
     global_step += 1
     
-    for pruning_step in range(7):
+    # Get the parameters to prune
+    # parameters_to_prune = get_prunable_parameters(model)
+    
+    # Get the pruning configurations
+    pruning_configs = []
+    file = Path('./data/yolov5s.log')
+    for i, (score, density, config) in enumerate(get_next(file)):
+        copy_config = {}
+        for key in config:
+            copy_config[key.replace('model.model.', '')] = config[key]
+        if i % 9 == 0 or i == 299:
+            pruning_configs.append(copy_config)
+    
+    # for pruning_step in range(7):
+    for pruning_step, pruning_config in enumerate(pruning_configs): # range(7)
         # Initialize model checkpoints
         best_fitness = 0.0
         last, best = w / f'last_{pruning_step}.pt', w / f'best_{pruning_step}.pt'
         
         # Prune model iteratively
-        prune_filters_(model, opt.weights, 0.1 + (0.1 * pruning_step))
+        # prune_filters_(model, opt.weights, 0.1 + (0.1 * pruning_step))
+        for name, module in model.named_modules():
+            if name in pruning_config:
+                prune_structured(module, 'weight', 5 * pruning_config[name])
         
         # Initial evalutation
         results, maps, _ = validate.run(data_dict,
@@ -645,7 +663,7 @@ def main(opt):
         log(writer, results, global_step, val_only=True)
         global_step += 1
         
-        for epoch in range(30):
+        for epoch in range(epochs):
             model.train()
             
             mloss = torch.zeros(3, device=device)  # mean losses

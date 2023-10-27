@@ -127,8 +127,12 @@ def main(opt):
     
     # Set up tensorboard summary writer
     # TODO: Create more comprhensive automated commenting
-    writer = SummaryWriter(comment=opt.model)
-    log_dir = writer.log_dir
+    writer = SummaryWriter(comment=f'_{opt.model}')
+    save_dir = Path(writer.log_dir)
+    
+    # Directories
+    w = save_dir / 'weights'  # weights dir
+    w.mkdir(parents=True, exist_ok=True)  # make dir
     
     # Set up training
     model, criterion, optimizer, scheduler, train_loader, val_loader = prepare_for_training(device, opt.model)
@@ -150,11 +154,11 @@ def main(opt):
         masked_params = get_num_masked_parameters(model)
         model_sparsity =  100 * (1 - ((total_params - masked_params) / total_params))
         
-        # Initialize best model metrics
+        # Initialize best and last model metrics
         best_dict = None
-        best_loss = 10_000
-        best_acc1 = 0
-        best_acc5 = 0
+        last_dict = None
+        best_fitness = 0.0
+        last, best = w / f'last_{pruning_step}.pt', w / f'best_{pruning_step}.pt'
     
         # The initial evaluation
         loss_eval, acc_1, acc_5 = evaluate(model, criterion, val_loader, device, pruning_step)
@@ -176,12 +180,13 @@ def main(opt):
             loss_eval, acc_1, acc_5 = evaluate(model, criterion, val_loader, device, epoch)
             
             # Update best model metrics
-            if loss_eval < best_loss:
-                best_loss = loss_eval
-                best_dict = model.state_dict()
-                best_acc1 = acc_1
-                best_acc5 = acc_5
-                
+            fitness = (0.1 * acc_5) + (0.9 * acc_1)
+            if best_fitness < fitness:
+                best_fitness = fitness
+                best_dict = {'params': model.state_dict(), 'accuracy_top_5': acc_5, 'accuracy_top_1': acc_1}
+            
+            if epoch == 29:
+                last_dict = {'params': model.state_dict(), 'accuracy_top_5': acc_5, 'accuracy_top_1': acc_1}                
             
             # Tensorboard
             writer.add_scalar('Training/Loss', loss_train, global_step)
@@ -194,7 +199,8 @@ def main(opt):
             global_step += 1
             
         # Save the best model of this pruning step
-        torch.save(best_dict, f'{log_dir}/{opt.model}_{pruning_step}_loss{best_loss}_acco{best_acc1}_accf{best_acc5}.pt')
+        torch.save(best_dict, best)
+        torch.save(last_dict, last)
     
 
 if __name__ == '__main__':

@@ -1,6 +1,7 @@
 import contextlib
 import re
 import time
+import json
 import torch
 import pytorch_cifar_models
 import torch.utils.data as data
@@ -78,7 +79,10 @@ def prune_filters(model: nn.Module, model_name: Literal, amount: float):
                 
 def prune_structured(module: nn.Module, name: Literal, amount: float):
     # Get the number of filters to be pruned
-    k = round(amount * module.out_channels)
+    if amount < 1:
+        k = round(amount * module.out_channels)
+    else:
+        k = int(amount)
     
     # Get the inf norms of the filters
     norms = torch.norm(module.weight.data, float('inf'), (1,2,3))
@@ -803,3 +807,208 @@ def remove_filters_from_conv2d(conv, indices):
     
     # Return the new module
     return new_conv
+
+def get_prunable_parameters(model: nn.Module):
+    parameters_to_prune = {}
+    for name, module in model.named_modules():
+        # Create list of all module names
+        
+        # The top level layers
+        if re.search('model\.[\d]*$', name) != None: 
+            # The first Conv layer--------------------------------------------------------------
+            # mAP50-95: 0.466
+            if name.endswith('model.0'):
+                for n, m in module.named_modules():
+                    if isinstance(m, nn.Conv2d):
+                        parameters_to_prune[f'{name}.{n}'] = (m, 'weight')
+            # ----------------------------------------------------------------------------------
+            
+            # The back-bone conv layers preceding C3 blocks-------------------------------------
+            # mAP50-95: 0.00836
+            if name.endswith('model.1') or name.endswith('model.3') or name.endswith('model.5') or name.endswith('model.7'):
+                for n, m in module.named_modules():
+                    if isinstance(m, nn.Conv2d):
+                        parameters_to_prune[f'{name}.{n}'] = (m, 'weight')
+            # ----------------------------------------------------------------------------------
+            
+            # The first conv layer in the back-bone bottlenecks---------------------------------
+            # mAP50-95: 0.0412
+            if name.endswith('model.2') or name.endswith('model.4') or name.endswith('model.6') or name.endswith('model.8'):
+                for n, m in module.named_modules():
+                    if re.search('m\.[\d]*\.cv1.conv$', n) != None:
+                        parameters_to_prune[f'{name}.{n}'] = (m, 'weight')
+            # ----------------------------------------------------------------------------------
+            
+            # The detour conv layer in the back-bone C3 blocks-----------------------------------
+            # mAP50-95: 0.0566
+            if name.endswith('model.2') or name.endswith('model.4') or name.endswith('model.6') or name.endswith('model.8'):
+                for n, m in module.named_modules():
+                    if n == 'cv2.conv':
+                        parameters_to_prune[f'{name}.{n}'] = (m, 'weight')
+            # ----------------------------------------------------------------------------------
+            
+            # Last conv layer in the 1st back-bone C3 blocks------------------------------------
+            # mAP50-95: 0.39
+            if name.endswith('model.2'):
+                for n, m in module.named_modules():
+                    if n == 'cv3.conv':
+                        parameters_to_prune[f'{name}.{n}'] = (m, 'weight')
+            # ----------------------------------------------------------------------------------
+            
+            # Last conv layer in the 2nd and 3rd back-bone C3 block-----------------------------
+            # mAP50-95: 0.258
+            if name.endswith('model.4') or name.endswith('model.6'): 
+                for n, m in module.named_modules():
+                    if n == 'cv3.conv':
+                        parameters_to_prune[f'{name}.{n}'] = (m, 'weight')
+            # ----------------------------------------------------------------------------------
+            
+            # The last conv layer in the 4th back-bone C3 block---------------------------------
+            # mAP50-95: 0.428
+            if name.endswith('model.8'):
+                for n, m in module.named_modules():
+                    if n == 'cv3.conv':
+                        parameters_to_prune[f'{name}.{n}'] = (m, 'weight')
+            # ----------------------------------------------------------------------------------
+            
+            # TODO: Debug the issue with the maxpooling channel weights
+            # The SPPF conv layers--------------------------------------------------------------
+            # mAP50-95: ERROR 
+            # if name.endswith('model.9'):
+            #     for n, m in module.named_modules():
+            #         if n == 'cv1.conv':
+            #             parameters_to_prune.append((m, 'weight'))
+            #             module_names.append(f'{name}.{n}')
+            #             prune.ln_structured(m, 'weight', sl, 1, 0)
+            # ----------------------------------------------------------------------------------
+            
+            # The first conv layer in the neck--------------------------------------------------
+            # mAP50-95: 0.385
+            if name.endswith('model.10'):
+                for n, m in module.named_modules():
+                    if n == 'conv':
+                        parameters_to_prune[f'{name}.{n}'] = (m, 'weight')
+            # ----------------------------------------------------------------------------------
+            
+            # The first conv layer in the neck--------------------------------------------------
+            # mAP50-95: 0.385
+            if name.endswith('model.10'):
+                for n, m in module.named_modules():
+                    if n == 'conv':
+                        parameters_to_prune[f'{name}.{n}'] = (m, 'weight')
+            # ----------------------------------------------------------------------------------
+            
+            # The 2nd conv layer in the neck----------------------------------------------------
+            # mAP50-95: 0.187
+            if name.endswith('model.14'):
+                for n, m in module.named_modules():
+                    if n == 'conv':
+                        parameters_to_prune[f'{name}.{n}'] = (m, 'weight')
+            # ----------------------------------------------------------------------------------
+            
+            # The 3rd and 4th conv layers in the neck-------------------------------------------
+            # mAP50-95: 0.365
+            if name.endswith('model.18') or name.endswith('model.21'):
+                for n, m in module.named_modules():
+                    if n == 'conv':
+                        parameters_to_prune[f'{name}.{n}'] = (m, 'weight')
+            # ----------------------------------------------------------------------------------
+            
+            # The external conv layers in the 1st C3 block in the neck--------------------------
+            # mAP50-95: 0.125
+            if name.endswith('model.13'):
+                for n, m in module.named_modules():
+                    if n == 'cv1.conv' or n == 'cv2.conv' or n == 'cv3.conv':
+                        parameters_to_prune[f'{name}.{n}'] = (m, 'weight')
+            # ----------------------------------------------------------------------------------
+            
+            # TODO: See why the HEAD pruning is causing non-deterministic quality metrics
+            # The external conv layers in the 2nd C3 block in the neck--------------------------
+            # mAP50-95: 0.335
+            # if name.endswith('model.17'):
+            #     for n, m in module.named_modules():
+            #         if n == 'cv1.conv' or n == 'cv2.conv': # or n == 'cv3.conv':
+            #             parameters_to_prume.append((m, 'weight'))
+            #             module_names.append(f'{name}.{n}')
+            #             prune.ln_structured(m, 'weight', sl, 1, 0)
+            # ----------------------------------------------------------------------------------
+            
+            # TODO: See why the HEAD pruning is causing non-deterministic quality metrics
+            # The external conv layers in the 3nd C3 block in the neck--------------------------
+            # mAP50-95: 0.268
+            # if name.endswith('model.20'):
+            #     for n, m in module.named_modules():
+            #         if n == 'cv1.conv' or n == 'cv2.conv': # or n == 'cv3.conv':
+            #             parameters_to_prume.append((m, 'weight'))
+            #             module_names.append(f'{name}.{n}')
+            #             prune.ln_structured(m, 'weight', sl, 1, 0)
+            # ----------------------------------------------------------------------------------
+            
+            # TODO: See why the HEAD pruning is causing non-deterministic quality metrics
+            # The external conv layers in the 4th C3 block in the neck--------------------------
+            # mAP50-95: 0.338
+            # if name.endswith('model.23'):
+            #     for n, m in module.named_modules():
+            #         if n == 'cv1.conv' or n == 'cv2.conv': # or n == 'cv3.conv':
+            #             parameters_to_prume.append((m, 'weight'))
+            #             module_names.append(f'{name}.{n}')
+            #             prune.ln_structured(m, 'weight', sl, 1, 0)
+            # ----------------------------------------------------------------------------------
+            
+            # The bottleneck conv layers in the 1st C3 block in the neck-------------------------
+            # mAP50-95: 0.306
+            if name.endswith('model.13'):
+                for n, m in module.named_modules():
+                    if n == 'm':
+                        for n_, m_ in m.named_modules():
+                            if n_.endswith('conv'):
+                                parameters_to_prune[f'{name}.{n}.{n_}'] = (m_, 'weight')
+            # ----------------------------------------------------------------------------------
+            
+            # The bottleneck conv layers in the 2nd C3 block in the neck-------------------------
+            # mAP50-95: 0.397
+            if name.endswith('model.17'):
+                for n, m in module.named_modules():
+                    if n == 'm':
+                        for n_, m_ in m.named_modules():
+                            if n_.endswith('conv'):
+                                parameters_to_prune[f'{name}.{n}.{n_}'] = (m_, 'weight')
+            # ----------------------------------------------------------------------------------
+            
+            # The bottleneck conv layers in the 3rd C3 block in the neck-------------------------
+            # mAP50-95: 0.379
+            if name.endswith('model.20'):
+                for n, m in module.named_modules():
+                    if n == 'm':
+                        for n_, m_ in m.named_modules():
+                            if n_.endswith('conv'):
+                                parameters_to_prune[f'{name}.{n}.{n_}'] = (m_, 'weight')
+            # ----------------------------------------------------------------------------------
+            
+            # The bottleneck conv layers in the 4th C3 block in the neck-------------------------
+            # mAP50-95: 0.336
+            if name.endswith('model.23'):
+                for n, m in module.named_modules():
+                    if n == 'm':
+                        for n_, m_ in m.named_modules():
+                            if n_.endswith('conv'):
+                                parameters_to_prune[f'{name}.{n}.{n_}'] = (m_, 'weight')
+            # ----------------------------------------------------------------------------------
+    # model.cuda()
+    return parameters_to_prune
+
+def get_next(file):
+    score, density, config = 0, 0, {}
+    is_conf = False
+    for row in open(file):
+        if row.startswith('Score:'):
+            row_list = row.split(' ')
+            score = float(row_list[1][:-1])
+            density = float(row_list[3][:-1])
+        elif row.startswith('Configuration:'):
+            is_conf = True
+        elif is_conf:
+            is_conf = False
+            config = json.loads(row.replace('\'', '"'))
+            # print(score, density, config)
+            yield score, density, config
