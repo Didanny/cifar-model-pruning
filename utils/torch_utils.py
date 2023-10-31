@@ -322,7 +322,7 @@ def smart_optimizer(model, name='Adam', lr=0.001, momentum=0.9, decay=1e-5):
     bn = tuple(v for k, v in nn.__dict__.items() if 'Norm' in k)  # normalization layers, i.e. BatchNorm2d()
     for v in model.modules():
         for p_name, p in v.named_parameters(recurse=0):
-            if p_name == 'bias':  # bias (no decay)
+            if (p_name == 'bias' or p_name == 'bias_orig'):  # bias (no decay)
                 g[2].append(p)
             elif p_name == 'weight' and isinstance(v, bn):  # weight (no decay)
                 g[1].append(p)
@@ -425,7 +425,12 @@ class ModelEMA:
         for k, v in self.ema.state_dict().items():
             if v.dtype.is_floating_point:  # true for FP16 and FP32
                 v *= d
+                v[msd[k] == 0] *= 0
                 v += (1 - d) * msd[k].detach()
+                # try:
+                #     v += (1 - d) * msd[k].detach()
+                # except KeyError:
+                #     v += (1 - d) * msd[k].detach()
         # assert v.dtype == msd[k].dtype == torch.float32, f'{k}: EMA {v.dtype} and model {msd[k].dtype} must be FP32'
 
     def update_attr(self, model, include=(), exclude=('process_group', 'reducer')):

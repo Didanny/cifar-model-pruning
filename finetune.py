@@ -138,10 +138,15 @@ def main(opt):
     model, criterion, optimizer, scheduler, train_loader, val_loader = prepare_for_training(device, opt.model)
     
     # The initial evalutation
-    evaluate(model, criterion, val_loader, device, 0)
+    loss_eval, acc_1, acc_5 = evaluate(model, criterion, val_loader, device, 0)
+    
+    # Tensorboard
+    writer.add_scalar('Validation/Loss', loss_eval, 0)
+    writer.add_scalar('Validation/Accuracy (Top-1)', acc_1, 0)
+    writer.add_scalar('Validation/Accuracy (Top-5)', acc_5, 0)
     
     # Begin Fine-tuning
-    global_step = 0
+    global_step = 1
     for pruning_step in range(13):
         # Prune the model once
         if pruning_step <= 8:

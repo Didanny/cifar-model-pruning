@@ -97,9 +97,9 @@
                 "--data", 
                 "coco128.yaml",
                 "--epochs",
-                "300",
+                "10",
                 "--weights",
-                "yolov5s.pt",
+                "yolov5n.pt",
                 "--batch",
                 "-1"
             ]

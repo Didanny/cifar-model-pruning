@@ -67,15 +67,26 @@ def cifar100():
     )
     
 def prune_filters(model: nn.Module, model_name: Literal, amount: float):
-    for name, module in model.named_modules():
-        if isinstance(module, nn.Conv2d):
-            prune.ln_structured(module, 'weight', amount, float('inf'), 0)
-            
-            if module.bias != None:
-                bias_mask = torch.ones_like(module.bias, device=next(model.parameters()).device)
-                filter_indices = get_filter_indices(module)
-                bias_mask[filter_indices] = 0
-                prune.custom_from_mask(module, 'bias', bias_mask)
+    if model_name.startswith('cifar100_vgg'):
+        for name, module in model.named_modules():
+            if isinstance(module, nn.Conv2d):
+                prune.ln_structured(module, 'weight', amount, float('inf'), 0)
+                
+                if module.bias != None:
+                    bias_mask = torch.ones_like(module.bias, device=next(model.parameters()).device)
+                    filter_indices = get_filter_indices(module)
+                    bias_mask[filter_indices] = 0
+                    prune.custom_from_mask(module, 'bias', bias_mask)
+    elif model_name.startswith('cifar100_resnet'):
+        for name, module in model.named_modules():
+            if isinstance(module, nn.Conv2d):
+                prune.ln_structured(module, 'weight', amount, float('inf'), 0)
+                
+                if module.bias != None:
+                    bias_mask = torch.ones_like(module.bias, device=next(model.parameters()).device)
+                    filter_indices = get_filter_indices(module)
+                    bias_mask[filter_indices] = 0
+                    prune.custom_from_mask(module, 'bias', bias_mask)
                 
 def prune_structured(module: nn.Module, name: Literal, amount: float):
     # Get the number of filters to be pruned

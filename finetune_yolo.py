@@ -533,8 +533,8 @@ def main(opt):
     accumulate = max(round(nbs / batch_size), 1)  # accumulate loss before optimizing
     hyp['weight_decay'] *= batch_size * accumulate / nbs  # scale weight_decay
     # TODO: Make learning rate user-defined
-    hyp['lr0'] = 0.0002
-    optimizer = smart_optimizer(model, opt.optimizer, hyp['lr0'], hyp['momentum'], hyp['weight_decay'])
+    hyp['lr0'] = 0.0005
+    # optimizer = smart_optimizer(model, opt.optimizer, hyp['lr0'], hyp['momentum'], hyp['weight_decay'])
     
     # EMA
     ema = ModelEMA(model) if RANK in {-1, 0} else None
@@ -615,6 +615,23 @@ def main(opt):
                                         plots=False,
                                         callbacks=Callbacks(),
                                         compute_loss=compute_loss)
+    
+    # Prune ema and model
+    # TODO: Replace with a real solution to the ema key mismatch problem
+    for name, module in ema.ema.named_modules():
+        if isinstance(module, nn.Conv2d):
+            prune.identity(module, 'weight')
+            if module.bias != None:
+                prune.identity(module, 'bias')
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Conv2d):
+            prune.identity(module, 'weight')
+            if module.bias != None:
+                prune.identity(module, 'bias')
+                
+    # Reinitialize optimizer (to include weight_orig instead of weight)
+    # TODO: Find better place to do this
+    optimizer = smart_optimizer(model, opt.optimizer, hyp['lr0'], hyp['momentum'], hyp['weight_decay'])
         
     # Tensorboard
     log(writer, results, global_step, val_only=True)
@@ -625,7 +642,7 @@ def main(opt):
     
     # Get the pruning configurations
     pruning_configs = []
-    file = Path('./data/yolov5s.log')
+    file = Path(f'./data/{weights[:-3]}.log')
     for i, (score, density, config) in enumerate(get_next(file)):
         copy_config = {}
         for key in config:
@@ -634,24 +651,36 @@ def main(opt):
             pruning_configs.append(copy_config)
     
     # for pruning_step in range(7):
-    for pruning_step, pruning_config in enumerate(pruning_configs): # range(7)
+    total_epochs = 0
+    from_config = False
+    if from_config:
+        g = enumerate(pruning_configs)
+    else:
+        g = range(30)
+    for pruning_step in g: # range(7)
+        if from_config:
+            pruning_config = pruning_step[1]
+            pruning_step = pruning_step[0] 
+        
         # Initialize model checkpoints
         best_fitness = 0.0
         last, best = w / f'last_{pruning_step}.pt', w / f'best_{pruning_step}.pt'
         
         # Prune model iteratively
-        # prune_filters_(model, opt.weights, 0.1 + (0.1 * pruning_step))
-        for name, module in model.named_modules():
-            if name in pruning_config:
-                prune_structured(module, 'weight', 5 * pruning_config[name])
-        
+        if not from_config: 
+            prune_filters_(model, opt.weights, 0.02 + (0.02 * pruning_step))
+        else:
+            for name, module in model.named_modules():
+                if name in pruning_config:
+                    prune_structured(module, 'weight', 5 * pruning_config[name])
+            
         # Initial evalutation
         results, maps, _ = validate.run(data_dict,
                                         batch_size=batch_size // WORLD_SIZE * 2,
                                         imgsz=imgsz,
                                         half=amp,
-                                        # model=ema.ema,
-                                        model=model,
+                                        model=ema.ema,
+                                        # model=model,
                                         single_cls=single_cls,
                                         dataloader=val_loader,
                                         save_dir=save_dir,
@@ -675,7 +704,8 @@ def main(opt):
             # Training batch
             optimizer.zero_grad()
             for i, (imgs, targets, paths, _) in pbar:
-                ni = i + nb * epoch  # number integrated batches (since train start)
+                total_epochs += 1
+                ni = i + nb * total_epochs  # number integrated batches (since train start)
                 imgs = imgs.to(device, non_blocking=True).float() / 255  # uint8 to float32, 0-255 to 0.0-1.0
 
                 # Forward
@@ -687,15 +717,16 @@ def main(opt):
                 scaler.scale(loss).backward()
                 
                 # Optimize - https://pytorch.org/docs/master/notes/amp_examples.html
-                if ni - last_opt_step >= accumulate:
-                    scaler.unscale_(optimizer)  # unscale gradients
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)  # clip gradients
-                    scaler.step(optimizer)  # optimizer.step
-                    scaler.update()
-                    optimizer.zero_grad()
-                    # if ema:
-                        # ema.update(model)
-                    last_opt_step = ni
+                # print(ni - last_opt_step >= accumulate, ni, last_opt_step, accumulate)
+                # if ni - last_opt_step >= accumulate:
+                scaler.unscale_(optimizer)  # unscale gradients
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)  # clip gradients
+                scaler.step(optimizer)  # optimizer.step
+                scaler.update()
+                optimizer.zero_grad()
+                if ema:
+                    ema.update(model)
+                last_opt_step = ni
                     
                 # Log
                 mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
@@ -704,15 +735,15 @@ def main(opt):
                                      (f'{epoch}/{epochs - 1}', mem, *mloss, targets.shape[0], imgs.shape[-1]))
                 
             # Validation
-            # ema.update_attr(model, include=['yaml', 'nc', 'hyp', 'names', 'stride', 'class_weights'])
+            ema.update_attr(model, include=['yaml', 'nc', 'hyp', 'names', 'stride', 'class_weights'])
             final_epoch = (epoch + 1 == epochs)
             
             results, maps, _ = validate.run(data_dict,
                                             batch_size=batch_size // WORLD_SIZE * 2,
                                             imgsz=imgsz,
                                             half=amp,
-                                            # model=ema.ema,
-                                            model = model,
+                                            model=ema.ema,
+                                            # model = model,
                                             single_cls=single_cls,
                                             dataloader=val_loader,
                                             save_dir=save_dir,
@@ -734,9 +765,9 @@ def main(opt):
             ckpt = {
                 'epoch': epoch,
                 'best_fitness': best_fitness,
-                'model': deepcopy(de_parallel(model)).half(),
-                # 'ema': deepcopy(ema.ema).half(),
-                # 'updates': ema.updates,
+                # 'model': deepcopy(de_parallel(model)).half(),
+                'ema': deepcopy(ema.ema).half(),
+                'updates': ema.updates,
                 'optimizer': optimizer.state_dict(),
                 'opt': vars(opt),
                 'date': datetime.now().isoformat()}
