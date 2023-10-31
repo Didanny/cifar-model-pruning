@@ -66,6 +66,13 @@ def cifar100():
         dataset_builder=CIFAR100,
     )
     
+def dummy_prune(model: nn.Module):
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Conv2d):
+            prune.identity(module, 'weight')
+            if module.bias != None:
+                prune.identity(module, 'bias')    
+    
 def prune_filters(model: nn.Module, model_name: Literal, amount: float):
     if model_name.startswith('cifar100_vgg'):
         for name, module in model.named_modules():
