@@ -52,6 +52,8 @@ def main(opt):
         
         # Weights directory
         weights = ROOT / runs_dir / 'weights'
+        best_results[-1].append(weights)
+        last_results[-1].append(weights)
         
         # Get the original metrics
         for weights_file in weights.glob('orig*'):
@@ -76,7 +78,7 @@ def main(opt):
             last_results[-1].append(checkpoint['accuracy_top_1'].item())
             
     # Write to the results file
-    header = ['Model Name', '0%', '10%', '20%', '30%', '40%', '50%', '60%', '70%', '80%', '90%', '92%', '94%', '96%', '98%']
+    header = ['Model Name', 'Path', '0%', '10%', '20%', '30%', '40%', '50%', '60%', '70%', '80%', '90%', '92%', '94%', '96%', '98%']
     with open(best_csv, 'w') as best_file:
         writer = csv.writer(best_file)
         writer.writerow(header)

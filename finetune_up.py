@@ -4,7 +4,7 @@ from tqdm import tqdm
 
 import torch 
 import torch.optim as optim
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR
 import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.classification import Accuracy
@@ -12,20 +12,22 @@ from torchmetrics.classification import Accuracy
 import pytorch_cifar_models
 from common import *
 from nn_utils import *
+from utils.torch_utils import (EarlyStopping, ModelEMA, de_parallel, select_device, smart_DDP, smart_optimizer,
+                               smart_resume, torch_distributed_zero_first)
 
 def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str)
-    parser.add_argument('--checkpoint', type=int)
+    parser.add_argument('--checkpoint', type=str)
     parser.add_argument('--starting-state', type=str)
     opt = parser.parse_args()
     print(vars(opt))
     return opt
 
-def prepare_for_training(device, model, starting_state):
+def prepare_for_training(device, model, starting_state, checkpoint):
     # Load the model
-    path = './runs/Oct09_04-08-33_poison.ics.uci.educifar100_vgg11_bn/cifar100_vgg11_bn_3_loss1.654237985610962_acco0.6675999760627747_accf0.8598999977111816.pt'
-    model = load_checkpoint(model, path)
+    # checkpoint = './runs/Oct09_04-08-33_poison.ics.uci.educifar100_vgg11_bn/cifar100_vgg11_bn_3_loss1.654237985610962_acco0.6675999760627747_accf0.8598999977111816.pt'
+    model = load_checkpoint(model, checkpoint)
     # convert_model(model)
     
     # Add the metrics to the model
@@ -137,11 +139,15 @@ def main(opt):
     
     # Set up tensorboard summary writer
     # TODO: Create more comprhensive automated commenting
-    writer = SummaryWriter(comment=f'{opt.model}_{opt.starting_state}')
-    log_dir = writer.log_dir
+    writer = SummaryWriter(comment=f'_{opt.model}_{opt.starting_state}')
+    save_dir = Path(writer.log_dir)
+    
+    # Directories
+    w = save_dir / 'weights'  # weights dir
+    w.mkdir(parents=True, exist_ok=True)  # make dir
     
     # Set up training
-    model, criterion, optimizer, scheduler, train_loader, val_loader = prepare_for_training(device, opt.model, opt.starting_state)
+    model, criterion, optimizer, scheduler, train_loader, val_loader = prepare_for_training(device, opt.model, opt.starting_state, opt.checkpoint)
     
     # The initial evalutation
     evaluate(model, criterion, val_loader, device, 0)
@@ -156,65 +162,90 @@ def main(opt):
     if torch.cuda.is_available():
         model.to(device=device)
         
+    # EMA
+    ema = ModelEMA(model)
+        
     # Reinitialize optimizer
-    optimizer = optim.SGD([v for n, v in model.features.named_parameters()], 0.001, 0.9, 0, 5e-4, True)
+    p = []
+    for _, mod in model.named_modules():
+        if not isinstance(mod, nn.Linear):
+            for _, v in mod.named_parameters():
+                p.append(v)            
+    optimizer = optim.SGD(p, 0.001, 0.9, 0, 5e-4, True)
     
-    # Initialize the best model metrics
+    # Reinitialize scheduler
+    epochs = 300
+    lf = lambda x: (1 - x / epochs) * (1.0 - 0.002) + 0.002 
+    # def lf(x):
+    #     if x <= 50:
+    #         return (1 - x / 50) * (1.0 - 0.01) + 0.01
+    #     else:
+    #         return 0.01
+    scheduler = LambdaLR(optimizer, lr_lambda=lf)
+    
+    # Initialize best and last model metrics
     best_dict = None
-    best_loss = 10_000
-    best_acc1 = 0
-    best_acc5 = 0
+    last_dict = None
+    best_fitness = 0.0
+    last, best = w / 'last.pt', w / 'best.pt'
     
     # Begin Fine-tuning
     global_step = 0
     
     # The initial evaluation
-    loss_eval, acc_1, acc_5 = evaluate(model, criterion, val_loader, device, 0)
+    loss_eval, acc_1, acc_5 = evaluate(ema.ema, criterion, val_loader, device, 0)
     global_step += 1
     
     # Tensorboard
     writer.add_scalar('Validation/Loss', loss_eval, global_step)
     writer.add_scalar('Validation/Accuracy (Top-1)', acc_1, global_step)
     writer.add_scalar('Validation/Accuracy (Top-5)', acc_5, global_step)
-    writer.add_scalar('Debug/fixed_weight_1', model.features[11].weight_list[0].data[0,0,0,0], global_step)
-    writer.add_scalar('Debug/fixed_weight_2', model.features[11].weight_list[0].data[0,0,0,1], global_step)
-    writer.add_scalar('Debug/fixed_weight_3', model.features[11].weight_list[0].data[0,0,0,2], global_step)
-    writer.add_scalar('Debug/trainable_weight_1', model.features[11].weight_list[1].data[0,0,0,0], global_step)
-    writer.add_scalar('Debug/trainable_weight_2', model.features[11].weight_list[1].data[0,0,0,1], global_step)
-    writer.add_scalar('Debug/trainable_weight_3', model.features[11].weight_list[1].data[0,0,0,2], global_step)
+    # writer.add_scalar('Debug/fixed_weight_1', model.features[11].weight_list[0].data[0,0,0,0], global_step)
+    # writer.add_scalar('Debug/fixed_weight_2', model.features[11].weight_list[0].data[0,0,0,1], global_step)
+    # writer.add_scalar('Debug/fixed_weight_3', model.features[11].weight_list[0].data[0,0,0,2], global_step)
+    # writer.add_scalar('Debug/trainable_weight_1', model.features[11].weight_list[1].data[0,0,0,0], global_step)
+    # writer.add_scalar('Debug/trainable_weight_2', model.features[11].weight_list[1].data[0,0,0,1], global_step)
+    # writer.add_scalar('Debug/trainable_weight_3', model.features[11].weight_list[1].data[0,0,0,2], global_step)
     
     # Begin Training
-    for epoch in range(350):
+    for epoch in range(epochs):
         # Train
         loss_train = train(model, criterion, optimizer, scheduler, train_loader, device, epoch)
+        ema.update(model)
+        scheduler.step()
+        print(optimizer.param_groups[0]['lr'])
             
         # Eval
-        loss_eval, acc_1, acc_5 = evaluate(model, criterion, val_loader, device, epoch)
-        
+        loss_eval, acc_1, acc_5 = evaluate(ema.ema, criterion, val_loader, device, epoch)
+
         # Update best model metrics
-        if loss_eval < best_loss:
-            best_loss = loss_eval
-            best_dict = model.state_dict()
-            best_acc1 = acc_1
-            best_acc5 = acc_5    
+        fitness = (0.1 * acc_5) + (0.9 * acc_1)
+        if best_fitness < fitness:
+            best_fitness = fitness
+            best_dict = {'params': ema.ema.state_dict(), 'accuracy_top_5': acc_5, 'accuracy_top_1': acc_1}
+            
+        # Update last model metrics
+        if epoch == 99:
+            last_dict = {'params': ema.ema.state_dict(), 'accuracy_top_5': acc_5, 'accuracy_top_1': acc_1}
             
         # Tensorboard
         writer.add_scalar('Training/Loss', loss_train, global_step)
         writer.add_scalar('Validation/Loss', loss_eval, global_step)
         writer.add_scalar('Validation/Accuracy (Top-1)', acc_1, global_step)
         writer.add_scalar('Validation/Accuracy (Top-5)', acc_5, global_step)
-        writer.add_scalar('Debug/fixed_weight_1', model.features[11].weight_list[0].data[0,0,0,0], global_step)
-        writer.add_scalar('Debug/fixed_weight_2', model.features[11].weight_list[0].data[0,0,0,1], global_step)
-        writer.add_scalar('Debug/fixed_weight_3', model.features[11].weight_list[0].data[0,0,0,2], global_step)
-        writer.add_scalar('Debug/trainable_weight_1', model.features[11].weight_list[1].data[0,0,0,0], global_step)
-        writer.add_scalar('Debug/trainable_weight_2', model.features[11].weight_list[1].data[0,0,0,1], global_step)
-        writer.add_scalar('Debug/trainable_weight_3', model.features[11].weight_list[1].data[0,0,0,2], global_step)
+        # writer.add_scalar('Debug/fixed_weight_1', model.features[11].weight_list[0].data[0,0,0,0], global_step)
+        # writer.add_scalar('Debug/fixed_weight_2', model.features[11].weight_list[0].data[0,0,0,1], global_step)
+        # writer.add_scalar('Debug/fixed_weight_3', model.features[11].weight_list[0].data[0,0,0,2], global_step)
+        # writer.add_scalar('Debug/trainable_weight_1', model.features[11].weight_list[1].data[0,0,0,0], global_step)
+        # writer.add_scalar('Debug/trainable_weight_2', model.features[11].weight_list[1].data[0,0,0,1], global_step)
+        # writer.add_scalar('Debug/trainable_weight_3', model.features[11].weight_list[1].data[0,0,0,2], global_step)
         
         # Increment global step
         global_step += 1
         
-    # Save the best model
-    torch.save(best_dict, f'{log_dir}/{opt.model}_{opt.starting_state}_loss{best_loss}_acco{best_acc1}_accf{best_acc5}.pt')
+    # Save the best and last
+    torch.save(best_dict, best)
+    torch.save(last_dict, last)
 
 
 if __name__ == '__main__':

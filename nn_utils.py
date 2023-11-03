@@ -3,7 +3,8 @@ from torch import nn
 import torch.nn.functional as F
 from typing import Optional, Sequence, Union, TypedDict
 from typing_extensions import Literal, TypeAlias
-from common import get_filter_indices
+import re
+from common import get_filter_indices, dot_num_to_brack, dot_num_to_brack_end
 
 class FrozenConv2d(nn.Module):
     def __init__(self, trainable_indices: torch.Tensor, fixed_indices: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] = None,
@@ -89,13 +90,37 @@ class FrozenConv2d(nn.Module):
     
 @torch.no_grad()
 def convert_model(model: nn.Module):
-    for i in range(len(model.features)):
-        if isinstance(model.features[i], nn.Conv2d):
-            model.features[i] = FrozenConv2d(model.features[i].trainable_indices,
-                                             model.features[i].fixed_indices,
-                                             model.features[i].weight.data.detach().clone(),
-                                             model.features[i].bias.data.detach().clone(),
-                                             model.features[i].stride,
-                                             model.features[i].padding,
-                                             model.features[i].dilation,
-                                             model.features[i].groups)
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Conv2d):
+            # Create frozen conv layer
+            if module.bias != None:
+                b = module.bias.data.detach().clone()
+            else:
+                b = None
+                
+            frozen = FrozenConv2d(module.trainable_indices,
+                                  module.fixed_indices,
+                                  module.weight.data.detach().clone(),
+                                  b,
+                                  module.stride,
+                                  module.padding,
+                                  module.dilation,
+                                  module.groups)
+            
+            # Sanitize name
+            name = re.sub('\.[\d]+\.', dot_num_to_brack, name)
+            name = re.sub('\.[\d]+', dot_num_to_brack_end, name)
+            
+            # Replace module
+            exec(f'model.{name} = frozen')
+            
+    # for i in range(len(model.features)):
+    #     if isinstance(model.features[i], nn.Conv2d):
+    #         model.features[i] = FrozenConv2d(model.features[i].trainable_indices,
+    #                                          model.features[i].fixed_indices,
+    #                                          model.features[i].weight.data.detach().clone(),
+    #                                          model.features[i].bias.data.detach().clone(),
+    #                                          model.features[i].stride,
+    #                                          model.features[i].padding,
+    #                                          model.features[i].dilation,
+    #                                          model.features[i].groups)

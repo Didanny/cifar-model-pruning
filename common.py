@@ -415,7 +415,7 @@ def load_checkpoint(model: str, path: str):
             prune.identity(module, 'weight')
             if module.bias != None:
                 prune.identity(module, 'bias')
-    model.load_state_dict(state)
+    model.load_state_dict(state['params'])
     
     return model
 
