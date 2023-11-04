@@ -1,0 +1,3 @@
+[submodule "auto-nn-compression"]
+	path = auto-nn-compression
+	url = https://github.com/Didanny/auto-nn-compression
