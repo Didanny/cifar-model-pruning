@@ -55,13 +55,13 @@ def _cifar(root, image_size, mean, std, batch_size, num_workers, dataset_builder
 
     return train_loader, val_loader
 
-def cifar100():
+def cifar100(batch_size: Optional[int] = 256):
     return _cifar(
         root=DATA_DIR,
         image_size=32,
         mean=[0.5070, 0.4865, 0.4409],
         std=[0.2673, 0.2564, 0.2761],
-        batch_size=256,
+        batch_size=batch_size,
         num_workers=2,
         dataset_builder=CIFAR100,
     )

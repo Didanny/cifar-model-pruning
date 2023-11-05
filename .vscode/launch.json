@@ -104,5 +104,24 @@
                 "-1"
             ]
         },
+        {
+            "name": "measure_inference_times",
+            "type": "python",
+            "request": "launch",
+            "program": "measure_inference_times.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--model", 
+                // "cifar100_resnet20",
+                "cifar100_vgg11_bn",
+                "--dataset",
+                "cifar100",
+                "--increment",
+                "0.1",
+                "--batches",
+                "256",
+            ]
+        },
     ]
 }
