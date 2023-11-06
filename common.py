@@ -1030,3 +1030,186 @@ def get_next(file):
             config = json.loads(row.replace('\'', '"'))
             # print(score, density, config)
             yield score, density, config
+            
+def init_dependency_graph(model, model_size):
+    if model_size == 's':
+        return init_dependency_graph_s(model)
+    elif model_size == 'm':
+        return init_dependency_graph_m(model)
+    else:
+        raise NotImplementedError
+    
+def init_dependency_graph_s(model):
+    dependency_graph_s = {
+        # The first Conv layer--------------------------------------------------------------
+        '1.conv' : model[0].conv,
+        # The back-bone conv layers preceding C3 blocks-------------------------------------
+        '2.cv1.conv' : model[1].conv,
+        '2.cv2.conv' : model[1].conv,
+        '4.cv1.conv' : model[3].conv,
+        '4.cv2.conv' : model[3].conv,
+        '6.cv1.conv' : model[5].conv,
+        '6.cv2.conv' : model[5].conv,
+        '8.cv1.conv' : model[7].conv,
+        '8.cv2.conv' : model[7].conv,
+        # The first conv layer in the back-bone bottlenecks---------------------------------
+        '2.m.0.cv2.conv' : model[2].m[0].cv1.conv,
+        '4.m.0.cv2.conv' : model[4].m[0].cv1.conv,
+        '4.m.1.cv2.conv' : model[4].m[1].cv1.conv,
+        '6.m.0.cv2.conv' : model[6].m[0].cv1.conv,
+        '6.m.1.cv2.conv' : model[6].m[1].cv1.conv,
+        '6.m.2.cv2.conv' : model[6].m[2].cv1.conv,
+        '8.m.0.cv2.conv' : model[8].m[0].cv1.conv,
+        # The detour conv layer in the back-bon C3 blocks-----------------------------------
+        '2.cv3.conv' : (model[2].m[0].cv2.conv, model[2].cv2.conv),
+        '4.cv3.conv' : (model[4].m[1].cv2.conv, model[4].cv2.conv),
+        '6.cv3.conv' : (model[6].m[2].cv2.conv, model[6].cv2.conv),
+        '8.cv3.conv' : (model[8].m[0].cv2.conv, model[8].cv2.conv),
+        # Last conv layer in the 1st back-bone C3 blocks------------------------------------
+        '3.conv' : model[2].cv3.conv,
+        # Last conv layer in the 2nd and 3rd back-bone C3 block-----------------------------
+        '5.conv' : model[4].cv3.conv,
+        '17.cv1.conv' : (model[14].conv, model[4].cv3.conv),
+        '17.cv2.conv' : (model[14].conv, model[4].cv3.conv),
+        '7.conv' : model[6].cv3.conv,
+        '13.cv1.conv' : (model[10].conv, model[6].cv3.conv),
+        '13.cv2.conv' : (model[10].conv, model[6].cv3.conv),
+        # The last conv layer in the 4th back-bone C3 block---------------------------------
+        '9.cv1.conv' : model[8].cv3.conv,
+        # TODO: Fix the bug where just including the SPPF conv layers in the dep-graph is causing a drop in accuracy
+        # The SPPF conv layers--------------------------------------------------------------
+        # '9.cv2.conv' : (model[9].cv1.conv, model[9].cv1.conv, model[9].cv1.conv, model[9].cv1.conv),
+        # The first conv layer in the neck--------------------------------------------------
+        '23.cv1.conv' : (model[21].conv, model[10].conv),
+        '23.cv2.conv' : (model[21].conv, model[10].conv),
+        # The 2nd conv layer in the neck----------------------------------------------------
+        '20.cv1.conv' : (model[18].conv, model[14].conv),
+        '20.cv2.conv' : (model[18].conv, model[14].conv),
+        # The external conv layers in the 1st C3 block in the neck--------------------------
+        '13.m.0.cv1.conv' : model[13].cv1.conv,
+        '13.cv3.conv' : (model[13].m[0].cv2.conv, model[13].cv2.conv),
+        '14.conv' : model[13].cv3.conv,
+        # The external conv layers in the 2nd C3 block in the neck--------------------------
+        '17.m.0.cv1.conv' : model[17].cv1.conv,
+        '17.cv3.conv' : (model[17].m[0].cv2.conv, model[17].cv2.conv),
+        '18.conv' : model[17].cv3.conv,
+        '24.m.0' : model[17].cv3.conv,
+        # The external conv layers in the 3nd C3 block in the neck--------------------------
+        '20.m.0.cv1.conv' : model[20].cv1.conv,
+        '20.cv3.conv' : (model[20].m[0].cv2.conv, model[20].cv2.conv),
+        '21.conv' : model[20].cv3.conv,
+        '24.m.1' : model[20].cv3.conv,
+        # The external conv layers in the 4th C3 block in the neck--------------------------
+        '23.m.0.cv1.conv' : model[23].cv1.conv,
+        '23.cv3.conv' : (model[23].m[0].cv2.conv, model[23].cv2.conv),
+        '24.m.2' : model[23].cv3.conv,
+        # The bottleneck conv layers in the 1st C3 block in the neck-------------------------
+        '13.m.0.cv1.conv' : model[13].cv1.conv,
+        '13.m.0.cv2.conv' : model[13].m[0].cv1.conv,
+        # The bottleneck conv layers in the 2nd C3 block in the neck-------------------------
+        '17.m.0.cv1.conv' : model[17].cv1.conv,
+        '17.m.0.cv2.conv' : model[17].m[0].cv1.conv,
+        # The bottleneck conv layers in the 3rd C3 block in the neck-------------------------
+        '20.m.0.cv1.conv' : model[20].cv1.conv,
+        '20.m.0.cv2.conv' : model[20].m[0].cv1.conv,
+        # The bottleneck conv layers in the 4th C3 block in the neck-------------------------
+        '23.m.0.cv1.conv' : model[23].cv1.conv,
+        '23.m.0.cv2.conv' : model[23].m[0].cv1.conv,        
+    }
+    
+    return dependency_graph_s
+
+def init_dependency_graph_m(model):
+    dependency_graph_m = {
+        # The first Conv layer--------------------------------------------------------------
+        '1.conv' : model[0].conv,
+        # The back-bone conv layers preceding C3 blocks-------------------------------------
+        '2.cv1.conv' : model[1].conv,
+        '2.cv2.conv' : model[1].conv,
+        '4.cv1.conv' : model[3].conv,
+        '4.cv2.conv' : model[3].conv,
+        '6.cv1.conv' : model[5].conv,
+        '6.cv2.conv' : model[5].conv,
+        '8.cv1.conv' : model[7].conv,
+        '8.cv2.conv' : model[7].conv,
+        # The first conv layer in the back-bone bottlenecks---------------------------------
+        '2.m.0.cv2.conv' : model[2].m[0].cv1.conv,
+        '2.m.1.cv2.conv' : model[2].m[1].cv1.conv,
+        '4.m.0.cv2.conv' : model[4].m[0].cv1.conv,
+        '4.m.1.cv2.conv' : model[4].m[1].cv1.conv,
+        '4.m.2.cv2.conv' : model[4].m[2].cv1.conv,
+        '4.m.3.cv2.conv' : model[4].m[3].cv1.conv,
+        '6.m.0.cv2.conv' : model[6].m[0].cv1.conv,
+        '6.m.1.cv2.conv' : model[6].m[1].cv1.conv,
+        '6.m.2.cv2.conv' : model[6].m[2].cv1.conv,
+        '6.m.3.cv2.conv' : model[6].m[3].cv1.conv,
+        '6.m.4.cv2.conv' : model[6].m[4].cv1.conv,
+        '6.m.5.cv2.conv' : model[6].m[5].cv1.conv,
+        '8.m.0.cv2.conv' : model[8].m[0].cv1.conv,
+        '8.m.1.cv2.conv' : model[8].m[1].cv1.conv,
+        # The detour conv layer in the back-bone C3 blocks-----------------------------------
+        '2.cv3.conv' : (model[2].m[1].cv2.conv, model[2].cv2.conv),
+        '4.cv3.conv' : (model[4].m[3].cv2.conv, model[4].cv2.conv),
+        '6.cv3.conv' : (model[6].m[5].cv2.conv, model[6].cv2.conv),
+        '8.cv3.conv' : (model[8].m[1].cv2.conv, model[8].cv2.conv),
+        # Last conv layer in the 1st back-bone C3 blocks------------------------------------
+        '3.conv' : model[2].cv3.conv,
+        # Last conv layer in the 2nd and 3rd back-bone C3 block-----------------------------
+        '5.conv' : model[4].cv3.conv,
+        '17.cv1.conv' : (model[14].conv, model[4].cv3.conv),
+        '17.cv2.conv' : (model[14].conv, model[4].cv3.conv),
+        '7.conv' : model[6].cv3.conv,
+        '13.cv1.conv' : (model[10].conv, model[6].cv3.conv),
+        '13.cv2.conv' : (model[10].conv, model[6].cv3.conv),
+        # The last conv layer in the 4th back-bone C3 block---------------------------------
+        '9.cv1.conv' : model[8].cv3.conv,
+        # TODO: Fix the bug where just including the SPPF conv layers in the dep-graph is causing a drop in accuracy
+        # The SPPF conv layers--------------------------------------------------------------
+        # '9.cv2.conv' : (model[9].cv1.conv, model[9].cv1.conv, model[9].cv1.conv, model[9].cv1.conv),
+        # The first conv layer in the neck--------------------------------------------------
+        '23.cv1.conv' : (model[21].conv, model[10].conv),
+        '23.cv2.conv' : (model[21].conv, model[10].conv),
+        # The 2nd conv layer in the neck----------------------------------------------------
+        '20.cv1.conv' : (model[18].conv, model[14].conv),
+        '20.cv2.conv' : (model[18].conv, model[14].conv),
+        # The external conv layers in the 1st C3 block in the neck--------------------------
+        '13.m.0.cv1.conv' : model[13].cv1.conv,
+        '13.cv3.conv' : (model[13].m[1].cv2.conv, model[13].cv2.conv),
+        '14.conv' : model[13].cv3.conv,
+        # The external conv layers in the 2nd C3 block in the neck--------------------------
+        '17.m.0.cv1.conv' : model[17].cv1.conv,
+        '17.cv3.conv' : (model[17].m[1].cv2.conv, model[17].cv2.conv),
+        '18.conv' : model[17].cv3.conv,
+        '24.m.0' : model[17].cv3.conv,
+        # The external conv layers in the 3rd C3 block in the neck--------------------------
+        '20.m.0.cv1.conv' : model[20].cv1.conv,
+        '20.cv3.conv' : (model[20].m[1].cv2.conv, model[20].cv2.conv),
+        '21.conv' : model[20].cv3.conv,
+        '24.m.1' : model[20].cv3.conv,
+        # The external conv layers in the 4th C3 block in the neck--------------------------
+        '23.m.0.cv1.conv' : model[23].cv1.conv,
+        '23.cv3.conv' : (model[23].m[1].cv2.conv, model[23].cv2.conv),
+        '24.m.2' : model[23].cv3.conv,
+        # The bottleneck conv layers in the 1st C3 block in the neck-------------------------
+        '13.m.0.cv1.conv' : model[13].cv1.conv,
+        '13.m.0.cv2.conv' : model[13].m[0].cv1.conv,
+        '13.m.1.cv1.conv' : model[13].m[0].cv2.conv,
+        '13.m.1.cv2.conv' : model[13].m[1].cv1.conv,
+        # The bottleneck conv layers in the 2nd C3 block in the neck-------------------------
+        '17.m.0.cv1.conv' : model[17].cv1.conv,
+        '17.m.0.cv2.conv' : model[17].m[0].cv1.conv,
+        '17.m.1.cv1.conv' : model[17].m[0].cv2.conv,
+        '17.m.1.cv2.conv' : model[17].m[1].cv1.conv,
+        # The bottleneck conv layers in the 3rd C3 block in the neck-------------------------
+        '20.m.0.cv1.conv' : model[20].cv1.conv,
+        '20.m.0.cv2.conv' : model[20].m[0].cv1.conv,
+        '20.m.1.cv1.conv' : model[20].m[0].cv2.conv,
+        '20.m.1.cv2.conv' : model[20].m[1].cv1.conv,
+        # The bottleneck conv layers in the 4th C3 block in the neck-------------------------
+        '23.m.0.cv1.conv' : model[23].cv1.conv,
+        '23.m.0.cv2.conv' : model[23].m[0].cv1.conv,
+        '23.m.1.cv1.conv' : model[23].m[0].cv2.conv,
+        '23.m.1.cv2.conv' : model[23].m[1].cv1.conv,       
+    }
+    
+    return dependency_graph_m
