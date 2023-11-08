@@ -147,12 +147,13 @@ def main(opt):
     
     # Begin Fine-tuning
     global_step = 1
-    for pruning_step in range(13):
+    for pruning_step in range(19):
         # Prune the model once
-        if pruning_step <= 8:
-            prune_filters(model, opt.model, 0.1)
-        else:
-            prune_filters(model, opt.model, 0.02)
+        prune_filters(model, opt.model, 0.05)
+        # if pruning_step <= 10:
+        #     prune_filters(model, opt.model, 0.05)
+        # else:
+        #     prune_filters(model, opt.model, 0.02)
             
         # Get the sparsity
         total_params = get_num_parameters(model)

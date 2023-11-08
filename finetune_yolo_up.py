@@ -20,6 +20,7 @@ from torch.optim import lr_scheduler
 import torch.nn.utils.prune as prune
 from tqdm import tqdm
 from common import get_filter_indices, prune_filters, prune_structured, get_prunable_parameters, get_next
+from nn_utils import convert_model
 
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.classification import Accuracy
@@ -505,19 +506,50 @@ def main(opt):
     check_suffix(weights, '.pt')  # check weights
     pretrained = weights.endswith('.pt')
     if pretrained:
-        with torch_distributed_zero_first(LOCAL_RANK):
-            weights = attempt_download(weights)  # download if not found locally
+        weights = attempt_download('./runs/Oct30_12-41-58_poison.ics.uci.edu_yolov5s.pt/weights/best_23.pt')  # download if not found locally
         ckpt = torch.load(weights, map_location='cpu')  # load checkpoint to CPU to avoid CUDA memory leak
-        model = Model(cfg or ckpt['model'].yaml, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
+        model = Model(cfg or ckpt['ema'].yaml, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
+        for name, module in model.named_modules():
+            if isinstance(module, nn.Conv2d):
+                prune.identity(module, 'weight')
+                if module.bias != None:
+                    prune.identity(module, 'bias')
         exclude = ['anchor'] if (cfg or hyp.get('anchors')) and not resume else []  # exclude keys
-        csd = ckpt['model'].float().state_dict()  # checkpoint state_dict as FP32
+        csd = ckpt['ema'].float().state_dict()  # checkpoint state_dict as FP32
         csd = intersect_dicts(csd, model.state_dict(), exclude=exclude)  # intersect
         model.load_state_dict(csd, strict=False)  # load
         LOGGER.info(f'Transferred {len(csd)}/{len(model.state_dict())} items from {weights}')  # report
     else:
         model = Model(cfg, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
+        
+    # Warmup to apply the masks
+    model(torch.rand(1,3,640,640).to(device=device, non_blocking=True))
+    
+    # Initialize the model
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Conv2d):
+            # Store the filter indices and old values
+            module.trainable_indices = get_filter_indices(module, pruned=True)
+            module.fixed_indices = get_filter_indices(module, pruned=False)
+            module.filter_indices = get_filter_indices(module, False)
+            module.old_weight = module.weight_orig.data
+            
+            # Remove the mask
+            prune.remove(module, 'weight')
+            
+            # Return the pruned weights to their original values
+            module.weight.data = module.old_weight.data
+            
+            # Repeat for bias
+            if module.bias != None:
+                module.old_bias = module.bias_orig.data
+                prune.remove(module, 'bias')
+                module.bias.data = module.old_bias.data
+                
+    # Convert Conv2d layers to FrozenConv2d
+    convert_model(model)
+    
     amp = check_amp(model)  # check AMP
-    breakpoint()
     for k, v in model.named_parameters():
         v.requires_grad = True  # train all layers
         
@@ -535,6 +567,7 @@ def main(opt):
     hyp['weight_decay'] *= batch_size * accumulate / nbs  # scale weight_decay
     # TODO: Make learning rate user-defined
     hyp['lr0'] = 0.0005
+    # hyp['lr0'] = 0.01
     # optimizer = smart_optimizer(model, opt.optimizer, hyp['lr0'], hyp['momentum'], hyp['weight_decay'])
     
     # EMA
@@ -619,69 +652,111 @@ def main(opt):
     
     # Prune ema and model
     # TODO: Replace with a real solution to the ema key mismatch problem
-    for name, module in ema.ema.named_modules():
-        if isinstance(module, nn.Conv2d):
-            prune.identity(module, 'weight')
-            if module.bias != None:
-                prune.identity(module, 'bias')
-    for name, module in model.named_modules():
-        if isinstance(module, nn.Conv2d):
-            prune.identity(module, 'weight')
-            if module.bias != None:
-                prune.identity(module, 'bias')
+    # for name, module in ema.ema.named_modules():
+    #     if isinstance(module, nn.Conv2d):
+    #         prune.identity(module, 'weight')
+    #         if module.bias != None:
+    #             prune.identity(module, 'bias')
+    # for name, module in model.named_modules():
+    #     if isinstance(module, nn.Conv2d):
+    #         prune.identity(module, 'weight')
+    #         if module.bias != None:
+    #             prune.identity(module, 'bias')
                 
     # Reinitialize optimizer (to include weight_orig instead of weight)
     # TODO: Find better place to do this
     optimizer = smart_optimizer(model, opt.optimizer, hyp['lr0'], hyp['momentum'], hyp['weight_decay'])
         
+    # Scheduler
+    hyp['lrf'] = 0.01
+    # if opt.cos_lr:
+    #     lf = one_cycle(1, hyp['lrf'], epochs)  # cosine 1->hyp['lrf']
+    # else:
+    lf = lambda x: (1 - x / epochs) * (1.0 - hyp['lrf']) + hyp['lrf']  # linear
+    scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lf)  # plot_lr_scheduler(optimizer, scheduler, epochs)
+    scheduler.last_epoch = start_epoch - 1
+    
     # Tensorboard
     log(writer, results, global_step, val_only=True)
     global_step += 1
-    
-    # Get the parameters to prune
-    # parameters_to_prune = get_prunable_parameters(model)
-    
-    # Get the pruning configurations
-    pruning_configs = []
-    file = Path(f'./data/{weights[:-3]}.log')
-    for i, (score, density, config) in enumerate(get_next(file)):
-        copy_config = {}
-        for key in config:
-            copy_config[key.replace('model.model.', '')] = config[key]
-        if i % 9 == 0 or i == 299:
-            pruning_configs.append(copy_config)
-    
-    # for pruning_step in range(7):
-    total_epochs = 0
-    from_config = False
-    if from_config:
-        g = enumerate(pruning_configs)
-    else:
-        g = range(30)
-    for pruning_step in g: # range(7)
-        if from_config:
-            pruning_config = pruning_step[1]
-            pruning_step = pruning_step[0] 
         
-        # Initialize model checkpoints
-        best_fitness = 0.0
-        last, best = w / f'last_{pruning_step}.pt', w / f'best_{pruning_step}.pt'
-        
-        # Prune model iteratively
-        if not from_config: 
-            prune_filters_(model, opt.weights, 0.02 + (0.02 * pruning_step))
-        else:
-            for name, module in model.named_modules():
-                if name in pruning_config:
-                    prune_structured(module, 'weight', 5 * pruning_config[name])
+    # Initialize model checkpoints
+    best_fitness = 0.0
+    last, best = w / f'last.pt', w / f'best.pt'
             
-        # Initial evalutation
+    # Initial evalutation
+    results, maps, _ = validate.run(data_dict,
+                                    batch_size=batch_size // WORLD_SIZE * 2,
+                                    imgsz=imgsz,
+                                    half=amp,
+                                    model=ema.ema,
+                                    # model=model,
+                                    single_cls=single_cls,
+                                    dataloader=val_loader,
+                                    save_dir=save_dir,
+                                    plots=False,
+                                        callbacks=Callbacks(),
+                                        compute_loss=compute_loss)
+        
+    # Tensorboard
+    log(writer, results, global_step, val_only=True)
+    global_step += 1
+        
+    for epoch in range(epochs):
+        model.train()
+        
+        mloss = torch.zeros(3, device=device)  # mean losses
+        
+        # Progress bar
+        pbar = enumerate(train_loader)
+        pbar = tqdm(pbar, total=nb, bar_format=TQDM_BAR_FORMAT)  # progress bar
+        
+        # Training batch
+        optimizer.zero_grad()
+        for i, (imgs, targets, paths, _) in pbar:
+            ni = i + nb * epoch  # number integrated batches (since train start)
+            imgs = imgs.to(device, non_blocking=True).float() / 255  # uint8 to float32, 0-255 to 0.0-1.0
+
+            # Forward
+            with torch.cuda.amp.autocast(amp):
+                pred = model(imgs)  # forward
+                loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
+            
+            # Backward
+            scaler.scale(loss).backward()
+            
+            # Optimize - https://pytorch.org/docs/master/notes/amp_examples.html
+            # print(ni - last_opt_step >= accumulate, ni, last_opt_step, accumulate)
+            # if ni - last_opt_step >= accumulate:
+            scaler.unscale_(optimizer)  # unscale gradients
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)  # clip gradients
+            scaler.step(optimizer)  # optimizer.step
+            scaler.update()
+            optimizer.zero_grad()
+            if ema:
+                ema.update(model)
+            last_opt_step = ni
+                
+            # Log
+            mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
+            mem = f'{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G'  # (GB)
+            pbar.set_description(('%11s' * 2 + '%11.4g' * 5) %
+                                    (f'{epoch}/{epochs - 1}', mem, *mloss, targets.shape[0], imgs.shape[-1]))
+            
+        # Scheduler
+        lr = [x['lr'] for x in optimizer.param_groups]  # for loggers
+        scheduler.step()
+            
+        # Validation
+        ema.update_attr(model, include=['yaml', 'nc', 'hyp', 'names', 'stride', 'class_weights'])
+        final_epoch = (epoch + 1 == epochs)
+        
         results, maps, _ = validate.run(data_dict,
                                         batch_size=batch_size // WORLD_SIZE * 2,
                                         imgsz=imgsz,
                                         half=amp,
                                         model=ema.ema,
-                                        # model=model,
+                                        # model = model,
                                         single_cls=single_cls,
                                         dataloader=val_loader,
                                         save_dir=save_dir,
@@ -689,99 +764,35 @@ def main(opt):
                                         callbacks=Callbacks(),
                                         compute_loss=compute_loss)
         
+        # Update best mAP
+        fi = fitness(np.array(results).reshape(1, -1))  # weighted combination of [P, R, mAP@.5, mAP@.5-.95]
+        if fi > best_fitness:
+            best_fitness = fi
+        log_vals = list(mloss) + list(results)
+        
         # Tensorboard
-        log(writer, results, global_step, val_only=True)
+        log(writer, log_vals, global_step)
         global_step += 1
         
-        for epoch in range(epochs):
-            model.train()
-            
-            mloss = torch.zeros(3, device=device)  # mean losses
-            
-            # Progress bar
-            pbar = enumerate(train_loader)
-            pbar = tqdm(pbar, total=nb, bar_format=TQDM_BAR_FORMAT)  # progress bar
-            
-            # Training batch
-            optimizer.zero_grad()
-            for i, (imgs, targets, paths, _) in pbar:
-                total_epochs += 1
-                ni = i + nb * total_epochs  # number integrated batches (since train start)
-                imgs = imgs.to(device, non_blocking=True).float() / 255  # uint8 to float32, 0-255 to 0.0-1.0
-
-                # Forward
-                with torch.cuda.amp.autocast(amp):
-                    pred = model(imgs)  # forward
-                    loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
-                
-                # Backward
-                scaler.scale(loss).backward()
-                
-                # Optimize - https://pytorch.org/docs/master/notes/amp_examples.html
-                # print(ni - last_opt_step >= accumulate, ni, last_opt_step, accumulate)
-                # if ni - last_opt_step >= accumulate:
-                scaler.unscale_(optimizer)  # unscale gradients
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)  # clip gradients
-                scaler.step(optimizer)  # optimizer.step
-                scaler.update()
-                optimizer.zero_grad()
-                if ema:
-                    ema.update(model)
-                last_opt_step = ni
-                    
-                # Log
-                mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
-                mem = f'{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G'  # (GB)
-                pbar.set_description(('%11s' * 2 + '%11.4g' * 5) %
-                                     (f'{epoch}/{epochs - 1}', mem, *mloss, targets.shape[0], imgs.shape[-1]))
-                
-            # Validation
-            ema.update_attr(model, include=['yaml', 'nc', 'hyp', 'names', 'stride', 'class_weights'])
-            final_epoch = (epoch + 1 == epochs)
-            
-            results, maps, _ = validate.run(data_dict,
-                                            batch_size=batch_size // WORLD_SIZE * 2,
-                                            imgsz=imgsz,
-                                            half=amp,
-                                            model=ema.ema,
-                                            # model = model,
-                                            single_cls=single_cls,
-                                            dataloader=val_loader,
-                                            save_dir=save_dir,
-                                            plots=False,
-                                            callbacks=Callbacks(),
-                                            compute_loss=compute_loss)
-            
-            # Update best mAP
-            fi = fitness(np.array(results).reshape(1, -1))  # weighted combination of [P, R, mAP@.5, mAP@.5-.95]
-            if fi > best_fitness:
-                best_fitness = fi
-            log_vals = list(mloss) + list(results)
-            
-            # Tensorboard
-            log(writer, log_vals, global_step)
-            global_step += 1
-            
-            # Save
-            ckpt = {
-                'epoch': epoch,
-                'best_fitness': best_fitness,
-                # 'model': deepcopy(de_parallel(model)).half(),
-                'ema': deepcopy(ema.ema).half(),
-                'updates': ema.updates,
-                'optimizer': optimizer.state_dict(),
-                'opt': vars(opt),
-                'date': datetime.now().isoformat()}
-            
-            # Save last, best and delete
-            torch.save(ckpt, last)
-            if best_fitness == fi:
-                torch.save(ckpt, best)
-            del ckpt
-            
-            # End epoch
-        # End training cycle
-    # End iterative pruning
+        # Save
+        ckpt = {
+            'epoch': epoch,
+            'best_fitness': best_fitness,
+            # 'model': deepcopy(de_parallel(model)).half(),
+            'ema': deepcopy(ema.ema).half(),
+            'updates': ema.updates,
+            'optimizer': optimizer.state_dict(),
+            'opt': vars(opt),
+            'date': datetime.now().isoformat()}
+        
+        # Save last, best and delete
+        torch.save(ckpt, last)
+        if best_fitness == fi:
+            torch.save(ckpt, best)
+        del ckpt
+        
+        # End epoch
+    # End training cycle
         
     
     

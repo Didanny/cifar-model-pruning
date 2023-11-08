@@ -105,6 +105,24 @@
             ]
         },
         {
+            "name": "finetune_yolo_up",
+            "type": "python",
+            "request": "launch",
+            "program": "finetune_yolo_up.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--data", 
+                "coco128.yaml",
+                "--epochs",
+                "10",
+                "--weights",
+                "yolov5s.pt",
+                "--batch",
+                "-1"
+            ]
+        },
+        {
             "name": "measure_inference_times",
             "type": "python",
             "request": "launch",

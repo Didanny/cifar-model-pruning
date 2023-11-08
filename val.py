@@ -131,6 +131,7 @@ def run(
     if training:  # called by train.py
         device, pt, jit, engine = next(model.parameters()).device, True, False, False  # get model device, PyTorch model
         half &= device.type != 'cpu'  # half precision only supported on CUDA
+        # breakpoint()
         model.half() if half else model.float()
     else:  # called directly
         device = select_device(device, batch_size=batch_size)
