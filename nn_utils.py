@@ -11,30 +11,51 @@ class FrozenConv2d(nn.Module):
                  stride: Optional[int] = 1, padding: Optional[int] = 0, dilation: Optional[int] = 1, groups: Optional[int] = 1):
         super().__init__()
         
-        # Get the pruned and unpruned indices 
-        self.trainable_indices = trainable_indices
-        self.fixed_indices = fixed_indices
-        
-        # Create the list of parameter and non-parameter weight tensors
-        self.weight_list = []
-        for i in range(len(self.trainable_indices) + len(self.fixed_indices)):
-            if i in self.trainable_indices:
-                setattr(self, f'trainable_weight_{i}', nn.Parameter(weight[i,:,:,:].unsqueeze(0)))
-                self.weight_list.append(f'trainable_weight_{i}')
-            else:
-                self.register_buffer(f'frozen_weight_{i}', weight[i,:,:,:].unsqueeze(0))
-                self.weight_list.append(f'frozen_weight_{i}')
-                
-        # Create the list of parameter and non-paramter bias tensors
-        self.bias_list = []
+        # Create the two weight matrices
+        self.trainable_weight = nn.Parameter(weight.detach().clone())
+        self.register_buffer('fixed_weight', weight.detach().clone())
         if bias != None:
-            for i in range(len(self.trainable_indices) + len(self.fixed_indices)):
-                if i in self.trainable_indices:
-                    setattr(self, f'trainable_bias_{i}', nn.Parameter(bias[i].unsqueeze(0)))
-                    self.bias_list.append(f'trainable_bias_{i}')
-                else:
-                    self.register_buffer(f'frozen_bias_{i}', bias[i].unsqueeze(0))
-                    self.bias_list.append(f'frozen_bias_{i}')
+            self.trainable_bias = nn.Parameter(bias.detach().clone())
+            self.register_buffer('fixed_bias', bias.detach().clone())
+            self.bias = True
+        else:
+            self.bias = False
+            
+        # Create the 2 masks
+        self.register_buffer('trainable_mask', torch.ones_like(self.trainable_weight))
+        self.trainable_mask[fixed_indices,:,:,:] *= 0
+        self.register_buffer('fixed_mask', torch.ones_like(self.trainable_weight))
+        self.fixed_mask[trainable_indices,:,:,:] *= 0
+        if self.bias:
+            self.register_buffer('trainable_bias_mask', torch.ones_like(self.trainable_bias))
+            self.trainable_bias_mask[fixed_indices] *= 0
+            self.register_buffer('fixed_bias_mask', torch.ones_like(self.trainable_bias))
+            self.fixed_bias_mask[trainable_indices] *= 0
+        
+        # # Get the pruned and unpruned indices 
+        # self.trainable_indices = trainable_indices
+        # self.fixed_indices = fixed_indices
+        
+        # # Create the list of parameter and non-parameter weight tensors
+        # self.weight_list = []
+        # for i in range(len(self.trainable_indices) + len(self.fixed_indices)):
+        #     if i in self.trainable_indices:
+        #         setattr(self, f'trainable_weight_{i}', nn.Parameter(weight[i,:,:,:].unsqueeze(0)))
+        #         self.weight_list.append(f'trainable_weight_{i}')
+        #     else:
+        #         self.register_buffer(f'frozen_weight_{i}', weight[i,:,:,:].unsqueeze(0))
+        #         self.weight_list.append(f'frozen_weight_{i}')
+                
+        # # Create the list of parameter and non-paramter bias tensors
+        # self.bias_list = []
+        # if bias != None:
+        #     for i in range(len(self.trainable_indices) + len(self.fixed_indices)):
+        #         if i in self.trainable_indices:
+        #             setattr(self, f'trainable_bias_{i}', nn.Parameter(bias[i].unsqueeze(0)))
+        #             self.bias_list.append(f'trainable_bias_{i}')
+        #         else:
+        #             self.register_buffer(f'frozen_bias_{i}', bias[i].unsqueeze(0))
+        #             self.bias_list.append(f'frozen_bias_{i}')
             
         # Copy the metadata
         self.stride = stride
@@ -44,12 +65,19 @@ class FrozenConv2d(nn.Module):
             
     def forward(self, x):            
         # Convolve
-        weight = torch.cat([getattr(self, n) for n in self.weight_list])
-        if len(self.bias_list) == 0:
-            bias = None
+        weight = (self.trainable_mask * self.trainable_weight) + (self.fixed_mask * self.fixed_weight)
+        if self.bias:
+            bias = (self.trainable_bias_mask * self.trainable_bias) + (self.fixed_bias_mask * self.fixed_bias)
         else:
-            bias = torch.cat([getattr(self, n) for n in self.bias_list])
+            bias = None
         return F.conv2d(x, weight, bias, self.stride, self.padding, self.dilation, self.groups)
+    
+        # weight = torch.cat([getattr(self, n) for n in self.weight_list])
+        # if len(self.bias_list) == 0:
+        #     bias = None
+        # else:
+        #     bias = torch.cat([getattr(self, n) for n in self.bias_list])
+        # return F.conv2d(x, weight, bias, self.stride, self.padding, self.dilation, self.groups)
     
 @torch.no_grad()
 def convert_model(model: nn.Module):
