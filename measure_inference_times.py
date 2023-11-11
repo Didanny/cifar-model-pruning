@@ -138,7 +138,7 @@ def main(opt):
         prepare_model(model)
         total_params = get_num_parameters(model)
         i = 1
-        while opt.increment * i < 0.99:
+        while opt.increment * i < 0.46:
             results.append([])
             results[-1].append(model_name)
             results[-1].append(opt.increment * i)

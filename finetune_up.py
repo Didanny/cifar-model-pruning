@@ -168,9 +168,8 @@ def main(opt):
     # Reinitialize optimizer
     p = []
     for _, mod in model.named_modules():
-        if not isinstance(mod, nn.Linear):
-            for _, v in mod.named_parameters():
-                p.append(v)            
+        for _, v in mod.named_parameters():
+            p.append(v)            
     optimizer = optim.SGD(p, 0.001, 0.9, 0, 5e-4, True)
     
     # Reinitialize scheduler

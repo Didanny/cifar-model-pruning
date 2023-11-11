@@ -517,7 +517,6 @@ def main(opt):
     else:
         model = Model(cfg, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
     amp = check_amp(model)  # check AMP
-    breakpoint()
     for k, v in model.named_parameters():
         v.requires_grad = True  # train all layers
         

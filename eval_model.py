@@ -1,7 +1,8 @@
 import csv
 import argparse
 import yaml
-from pathlib import Path
+from pathlib import 
+from tqdm import tqdm
 
 import torch
 import torch.nn as nn
@@ -78,7 +79,8 @@ def main(opt):
             last_results[-1].append(checkpoint['accuracy_top_1'].item())
             
     # Write to the results file
-    header = ['Model Name', 'Path', '0%', '10%', '20%', '30%', '40%', '50%', '60%', '70%', '80%', '90%', '92%', '94%', '96%', '98%']
+    header = ['Model Name', 'Path']
+    header += [f'{i}%' for i in range(0, 100, 5)]
     with open(best_csv, 'w') as best_file:
         writer = csv.writer(best_file)
         writer.writerow(header)

@@ -9,7 +9,7 @@ import finetune_up
 
 def parse_opt():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--max-drop', type=float, default=0.05)
+    parser.add_argument('--max-drop', type=float, default=0.03)
     parser.add_argument('--data-file', type=str, default='./results/best.cifar100.csv')
     parser.add_argument('--starting-state', type=str, default='orig')
     opt = parser.parse_args()

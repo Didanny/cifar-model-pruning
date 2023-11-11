@@ -175,7 +175,12 @@ def fuse_batchnorms(model: nn.Module, name: str, **kwargs):
                 model.features[i].requires_grad = False
                 model.features[i + 1] = nn.Identity()
     elif name.startswith('cifar100_resnet'):
-        raise NotImplementedError
+        prev_module = None
+        for name, next_module in model.named_modules():
+            if isinstance(next_module, nn.BatchNorm2d) and isinstance(prev_module, nn.Conv2d):
+                prev_module = fuse_conv_and_bn(prev_module, next_module, **kwargs)
+                prev_module.requires_grad = False
+                next_module = nn.Identity()
     elif name.startswith('cifar100_mobilenet'):
         raise NotImplementedError
     
