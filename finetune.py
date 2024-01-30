@@ -189,10 +189,10 @@ def main(opt):
             fitness = (0.1 * acc_5) + (0.9 * acc_1)
             if best_fitness < fitness:
                 best_fitness = fitness
-                best_dict = {'params': model.state_dict(), 'accuracy_top_5': acc_5, 'accuracy_top_1': acc_1}
+                best_dict = {'params': model.state_dict(), 'accuracy_top_5': acc_5, 'accuracy_top_1': acc_1, 'global_step': global_step}
             
             if epoch == 29:
-                last_dict = {'params': model.state_dict(), 'accuracy_top_5': acc_5, 'accuracy_top_1': acc_1}                
+                last_dict = {'params': model.state_dict(), 'accuracy_top_5': acc_5, 'accuracy_top_1': acc_1, 'global_step': global_step}                
             
             # Tensorboard
             writer.add_scalar('Training/Loss', loss_train, global_step)

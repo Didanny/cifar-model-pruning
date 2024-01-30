@@ -77,6 +77,9 @@ def prune_filters(model: nn.Module, model_name: Literal, amount: float):
     if model_name.startswith('cifar100_vgg'):
         for name, module in model.named_modules():
             if isinstance(module, nn.Conv2d):
+                if not hasattr(module, 'weight_mask'):
+                    module.register_buffer('pruning_order', torch.zeros_like(module.weight.data))
+                
                 prune.ln_structured(module, 'weight', amount, float('inf'), 0)
                 
                 if module.bias != None:
@@ -84,6 +87,8 @@ def prune_filters(model: nn.Module, model_name: Literal, amount: float):
                     filter_indices = get_filter_indices(module)
                     bias_mask[filter_indices] = 0
                     prune.custom_from_mask(module, 'bias', bias_mask)
+                    
+                module.pruning_order += module.weight_mask
     elif model_name.startswith('cifar100_resnet'):
         for name, module in model.named_modules():
             if isinstance(module, nn.Conv2d):
